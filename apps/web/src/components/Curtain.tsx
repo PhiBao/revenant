@@ -21,7 +21,7 @@ export function Curtain({ nearestUrl, dayUrl, dayLabel }: Props) {
   return (
     <figure className="curtain">
       <div className="curtain-labels" aria-hidden="true">
-        <span>Nearest capture, no date check</span>
+        <span>What archive playback gives</span>
         <span>{dayLabel}</span>
       </div>
 
@@ -35,7 +35,7 @@ export function Curtain({ nearestUrl, dayUrl, dayLabel }: Props) {
         <iframe
           className="curtain-frame curtain-frame-nearest"
           src={nearestUrl}
-          title="Restoration using the nearest capture of every file"
+          title="What archive playback gives: the nearest capture of every file"
           sandbox=""
           style={{ clipPath: `inset(0 ${100 - pos}% 0 0)` }}
         />
@@ -58,7 +58,7 @@ export function Curtain({ nearestUrl, dayUrl, dayLabel }: Props) {
         />
         <div className="curtain-toggle" role="group" aria-label="Choose a restoration">
           <button type="button" aria-pressed={pos === 100} onClick={() => setPos(100)}>
-            Nearest capture
+            Archive playback
           </button>
           <button type="button" aria-pressed={pos === 0} onClick={() => setPos(0)}>
             As it was

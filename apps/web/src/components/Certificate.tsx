@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { Job } from "@/lib/api";
-import { formatPercent } from "@/lib/api";
+import { formatPercent, sameRestore } from "@/lib/api";
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [done, setDone] = useState(false);
@@ -31,6 +31,7 @@ function filenameOf(job: Job) {
 }
 
 export function Certificate({ strict, nearest }: { strict: Job; nearest: Job }) {
+  const same = sameRestore(strict.certificate, nearest.certificate);
   const c = strict.certificate;
   const file = filenameOf(strict);
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -55,7 +56,7 @@ export function Certificate({ strict, nearest }: { strict: Job; nearest: Job }) 
       <dl className="paper-facts">
         <div>
           <dt>As of</dt>
-          <dd>{strict.date}</dd>
+          <dd>{strict.date}, end of day UTC</dd>
         </div>
         <div>
           <dt>Source</dt>
@@ -92,12 +93,14 @@ export function Certificate({ strict, nearest }: { strict: Job; nearest: Job }) 
           Download as it was
           <span className="btn-sub">{plural(strictCount, "file", "files")} · only what can be shown for that day</span>
         </a>
-        <a className="btn btn-ghost" href={nearest.urls.zip} download={filenameOf(nearest)}>
-          Download with nearest captures
-          <span className="btn-sub">
-            {plural(nearestCount, "file", "files")} · includes files captured later
-          </span>
-        </a>
+        {same ? null : (
+          <a className="btn btn-ghost" href={nearest.urls.zip} download={filenameOf(nearest)}>
+            Download what archive playback gives
+            <span className="btn-sub">
+              {plural(nearestCount, "file", "files")} · includes files Revenant cannot vouch for
+            </span>
+          </a>
+        )}
       </div>
 
       <div className="verify">

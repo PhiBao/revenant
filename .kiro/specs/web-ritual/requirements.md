@@ -28,3 +28,15 @@ Source: PLAN.md §7 (design direction) and §12.9 (failure states), as amended b
 - W5.2 WHEN `prefers-reduced-motion` is set THEN no animation SHALL run and all content SHALL be visible.
 - W5.3 The page SHALL work at 360 px width and with the keyboard alone.
 - W5.4 The site SHALL ship an SVG favicon, a 32 px and a 180 px PNG, and `favicon.ico`, all showing the tombstone-with-EKG mark.
+
+## W6 Evidence on the page (added Nov 12, 2026)
+
+Source: engine requirements R6 and R7.
+
+- W6.1 The ledger SHALL show the `ATTESTED` verdict as a word and a shape, and SHALL show, for every file, why it got its verdict (the certificate's `basis`) and when the server says the file last changed.
+- W6.2 WHEN Fidelity from capture dates alone differs from Fidelity with server evidence THEN the autopsy SHALL show both numbers side by side and say what the difference is, in words.
+- W6.3 The second restore SHALL be the `nearest` restore, labelled as what archive playback does.
+- W6.4 WHEN the nearest restore and the strict restore contain the same files with the same hashes THEN the comparison view SHALL NOT be shown. In its place a short statement SHALL say that both methods give the same page, and that Revenant's difference is that it can show why each file is trusted.
+- W6.5 WHEN the two restores differ THEN the comparison view SHALL be shown, with the labels "What archive playback gives" and "What can be shown as it was on <date>".
+- W6.7 A ledger line SHALL start with a capital letter, SHALL NOT repeat itself, and SHALL NOT contain implementation detail (hashing, rewriting). Detail that belongs to the certificate as a whole SHALL be in its notes.
+- W6.6 The target time SHALL be described as "the end of <date>, UTC" wherever the date is shown with a result, because a page can change during the day.

@@ -333,7 +333,7 @@ fn describe_choice(req: &Request, j: &Judged, used: Option<&Capture>) -> Option<
         return j.sel.note.map(str::to_string);
     }
     Some(format!(
-        "nearest capture; Revenant would use the copy from {}",
+        "Playback takes the closest copy; Revenant would use the one from {}.",
         format_cdx_timestamp(theirs.ts)
     ))
 }
@@ -505,12 +505,9 @@ pub fn resurrect_with(
             }
         } else if judged.sel.verdict == Verdict::Anachronism {
             record.note = Some(match judged.sel.note {
-                Some(n) => format!("left out: {n}"),
-                None => "left out: first captured after the target time".into(),
+                Some(n) => format!("Left out: {n}."),
+                None => "Left out: first captured after the target time.".into(),
             });
-        } else if judged.sel.verdict == Verdict::Missing {
-            record.note =
-                Some("no usable capture (archived only as an error page, or not at all)".into());
         }
         ledger.push(LedgerRow {
             label: asset.clone(),
@@ -549,8 +546,7 @@ pub fn resurrect_with(
         archive_digest: Some(page_cap.digest.clone()),
         sha256: Some(sha256_hex(&rewritten.bytes)),
         bytes: Some(rewritten.bytes.len()),
-        note: describe_choice(req, &page, Some(&page_cap))
-            .or_else(|| Some("sha256 is of the rewritten page, not the archived original".into())),
+        note: describe_choice(req, &page, Some(&page_cap)),
     };
     entries.push(Entry {
         path: page_path.clone(),
@@ -591,6 +587,7 @@ pub fn resurrect_with(
         archive_host_text_mentions: mentions,
         notes: vec![
             "Archive digests are the archive's claim. File identity here is the SHA-256 of the bytes.",
+            "The SHA-256 of the page is of the rewritten page, not the archived original.",
             "Server Last-Modified dates are the origin's claim. They are used as evidence, and ignored when they contradict the archive.",
             "Single-page scope: navigation links are not restored.",
         ],

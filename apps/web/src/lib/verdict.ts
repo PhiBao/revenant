@@ -15,6 +15,12 @@ export const VERDICTS: Record<Verdict, VerdictMeta> = {
     meaning:
       "Captured before the date, and the same content was captured again after it. It did not change across the date.",
   },
+  ATTESTED: {
+    glyph: "◉",
+    label: "Attested",
+    meaning:
+      "The archive's copy is from after the date, but the server's own Last-Modified date shows the file had not changed since before it.",
+  },
   LIKELY: {
     glyph: "◐",
     label: "Likely",
@@ -46,6 +52,7 @@ export const VERDICTS: Record<Verdict, VerdictMeta> = {
 
 export const VERDICT_ORDER: Verdict[] = [
   "PROVEN",
+  "ATTESTED",
   "LIKELY",
   "UNCERTAIN",
   "ANACHRONISM",

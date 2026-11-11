@@ -162,6 +162,7 @@ fn a_confirmed_anachronism_is_left_out_under_strict_and_kept_when_asked() {
     assert_eq!(new.verdict, "ANACHRONISM");
     assert!(!new.included);
     assert!(new.note.as_deref().unwrap().contains("made after the date"));
+    assert!(new.note.as_deref().unwrap().starts_with("Left out: "));
     let old = record(&strict.certificate, "old.gif");
     assert_eq!(old.verdict, "ATTESTED");
     assert!(old.included);
@@ -255,7 +256,7 @@ fn the_nearest_restore_uses_the_closest_capture_and_still_reports_revenants_verd
         .note
         .as_deref()
         .unwrap()
-        .contains("Revenant would use the copy from 20000422000000"));
+        .contains("Revenant would use the one from 20000422000000"));
 }
 
 /// R7.3: when the two methods pick the same files, every file but the certificate matches.

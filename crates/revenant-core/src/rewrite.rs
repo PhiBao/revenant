@@ -341,7 +341,33 @@ fn is_site_host(ctx: &Context, host: &str) -> bool {
 
 /// Resolve `reference` against the directory of `page_path`. Returns the site-root path, or
 /// `None` when the reference climbs above the site root.
-fn normalize(page_path: &str, reference: &str) -> Option<String> {
+/// The site-root path a reference points at, or `None` when it is not a site file.
+///
+/// Used after rewriting, where a reference is either relative to the page or the original absolute
+/// URL. Query and fragment are ignored.
+pub(crate) fn site_path_of(page_path: &str, value: &str, site_hosts: &[&str]) -> Option<String> {
+    let value = value.trim();
+    let path = if let Some((host, rest)) = split_absolute(value) {
+        let bare = host.strip_prefix("www.").unwrap_or(&host);
+        if !site_hosts.iter().any(|h| {
+            h.strip_prefix("www.")
+                .unwrap_or(h)
+                .eq_ignore_ascii_case(bare)
+        }) {
+            return None;
+        }
+        rest
+    } else {
+        value.to_string()
+    };
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    if path.is_empty() {
+        return None;
+    }
+    normalize(page_path, path)
+}
+
+pub(crate) fn normalize(page_path: &str, reference: &str) -> Option<String> {
     let mut stack: Vec<&str> = Vec::new();
     if !reference.starts_with('/') {
         let mut dir: Vec<&str> = page_path.split('/').collect();

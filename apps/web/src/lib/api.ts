@@ -1,5 +1,6 @@
 export type Verdict =
   | "PROVEN"
+  | "ATTESTED"
   | "LIKELY"
   | "UNCERTAIN"
   | "ANACHRONISM"
@@ -9,13 +10,25 @@ export type Verdict =
 export interface FileRecord {
   path: string;
   verdict: Verdict;
+  /** What capture dates alone would have said. */
+  verdict_from_dates_only: Verdict;
+  /** Why the file got its verdict, in plain words. */
+  basis: string;
   included: boolean;
   capture_time: string | null;
+  /** The origin server's own Last-Modified for the chosen capture. */
+  origin_modified: string | null;
   delta_days: number | null;
   archive_digest: string | null;
   sha256: string | null;
   bytes: number | null;
   note: string | null;
+}
+
+export interface Vitals {
+  completeness_percent: number | null;
+  fidelity_percent: number | null;
+  unknown_files: number;
 }
 
 export interface Certificate {
@@ -26,11 +39,9 @@ export interface Certificate {
   mode: "LIVE" | "SEEDED";
   archive: string;
   policy: string;
-  vitals: {
-    completeness_percent: number | null;
-    fidelity_percent: number | null;
-    unknown_files: number;
-  };
+  vitals: Vitals;
+  /** The same files scored from capture dates alone. */
+  vitals_from_dates_only: Vitals;
   files: FileRecord[];
   links_not_restored: string[];
   scripts_removed: number;
@@ -43,7 +54,7 @@ export interface Job {
   id: string;
   example: string;
   date: string;
-  policy: "strict" | "with-anachronisms";
+  policy: "strict" | "with-anachronisms" | "nearest";
   mode: "LIVE" | "SEEDED";
   expires_in_secs: number;
   zip_sha256: string;
@@ -75,7 +86,7 @@ export type Failure =
     }
   | { kind: "network" };
 
-export type PolicyName = "strict" | "include-anachronisms";
+export type PolicyName = "strict" | "include-anachronisms" | "nearest";
 
 async function parseFailure(res: Response): Promise<Failure> {
   let body: unknown = null;
@@ -175,4 +186,21 @@ export function formatDelta(days: number | null): string {
 
 export function formatPercent(p: number | null): string {
   return p === null ? "—" : p.toFixed(1);
+}
+
+/** `20000301091452` becomes `2000-03-01`. */
+export function formatDay(cdx: string | null): string {
+  if (!cdx || cdx.length < 8) return "—";
+  return `${cdx.slice(0, 4)}-${cdx.slice(4, 6)}-${cdx.slice(6, 8)}`;
+}
+
+/** True when two restores contain the same files with the same bytes (W6.4). */
+export function sameRestore(a: Certificate, b: Certificate): boolean {
+  const key = (c: Certificate) =>
+    c.files
+      .filter((f) => f.included)
+      .map((f) => `${f.path}:${f.sha256}`)
+      .sort()
+      .join("|");
+  return key(a) === key(b);
 }

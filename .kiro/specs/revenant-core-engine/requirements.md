@@ -75,3 +75,18 @@ Why: the comparison view needs a fair stand-in for what archive playback does. P
 - R7.1 A request MAY ask for the `nearest` restore: for every file, choose the capture whose time is closest to T, ties going to the earlier one, and include it unless the file is `MISSING` or `UNKNOWN`.
 - R7.2 The nearest restore SHALL still report Revenant's verdict for each file, so its ledger shows which of its files Revenant cannot vouch for.
 - R7.3 (amended Nov 12, 2026: the certificate records the policy, so whole ZIPs cannot be identical) WHEN the nearest restore and the strict restore contain the same files THEN every file except the certificate SHALL have the same bytes and the same SHA-256, so a client can tell from the two certificates that the methods agree.
+
+## R8 Annotated view (added Nov 12, 2026)
+
+Why: the verdicts live in a table below the page. A visitor looking at the restored page cannot tell which image is attested, which is missing, or why a gap is there, and a missing image shows as a broken-image icon that looks like a bug.
+
+- R8.1 The system SHALL produce an annotated copy of a restored page from the page's bytes and the certificate, without changing the ZIP or the page inside it.
+- R8.2 Every `<img>` whose file is in the ZIP SHALL be wrapped in a marker carrying its verdict and a short tag (for example "attested 1999-12-27"), plus the full sentence as a tooltip. (Amended Nov 12, 2026: tags were first drawn over the image and hid the labels on navigation buttons.)
+- R8.10 A tag SHALL NOT cover any part of the image it describes. It SHALL sit in the page's flow beside or below the image, and SHALL be no wider than the image.
+- R8.3 Every `<img>` whose file is a site file that is not in the ZIP SHALL be replaced by a labelled placeholder of the same declared width and height, saying why ("not archived", "first saved 2000-03-04", "the archive did not answer").
+- R8.4 Images that are not site files (external hosts) SHALL be left alone.
+- R8.5 The annotated copy SHALL carry one `<style>` block and one bar at the top of the body naming the page's own verdict and the chosen copy's date.
+- R8.6 All text inserted SHALL be escaped, and SHALL come from the certificate's fixed vocabulary and dates. No text from the archived page SHALL be copied into inserted markup.
+- R8.7 Bytes outside the markup SHALL be left exactly as they were, as in R5's rewriter.
+- R8.8 WHEN there is nothing to annotate THEN the input SHALL be returned unchanged.
+- R8.9 The annotator SHALL NOT panic on arbitrary bytes.

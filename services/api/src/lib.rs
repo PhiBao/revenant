@@ -11,12 +11,13 @@ use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::extract::rejection::BytesRejection;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use revenant_core::annotate::{annotate_html, Annotation};
 use revenant_core::pipeline::{
     resurrect, resurrect_with, Limits, PipelineError, Request as PipelineRequest, Resurrection,
     SeededSource,
@@ -646,12 +647,23 @@ async fn preview_redirect(Path(id): Path<String>) -> Response {
     Redirect::permanent(&format!("/p/{id}/")).into_response()
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct PreviewQuery {
+    #[serde(default)]
+    annotate: Option<String>,
+}
+
 async fn preview_page(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
+    Query(q): Query<PreviewQuery>,
 ) -> Result<Response, ApiError> {
     let job = app.job(&id).ok_or_else(ApiError::not_found)?;
     let page = job.result.certificate.page.clone();
+    // Only the page can be annotated, and only when asked (E3.1, E3.2).
+    if q.annotate.as_deref() == Some("1") {
+        return serve_annotated(&app, &job, &page);
+    }
     serve_entry(&app, &job, &page)
 }
 
@@ -671,12 +683,39 @@ fn serve_entry(app: &App, job: &Job, path: &str) -> Result<Response, ApiError> {
         .iter()
         .find(|e| e.path == path)
         .ok_or_else(ApiError::not_found)?;
-    let mut res = Response::new(Body::from(entry.bytes.clone()));
+    preview_response(app, entry.bytes.clone(), content_type(path))
+}
+
+/// The page with verdicts drawn on it (E3.1). Built from the certificate, so it cannot disagree
+/// with the ledger, and never stored.
+fn serve_annotated(app: &App, job: &Job, page: &str) -> Result<Response, ApiError> {
+    let entry = job
+        .result
+        .entries
+        .iter()
+        .find(|e| e.path == page)
+        .ok_or_else(ApiError::not_found)?;
+    let annotation = Annotation::from_certificate(&job.result.certificate);
+    let bytes = annotate_html(&entry.bytes, &annotation).map_err(|e| {
+        tracing::warn!(error = ?e, "annotation failed");
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "The annotated view could not be built.",
+        )
+    })?;
+    preview_response(app, bytes, content_type(page))
+}
+
+/// Every preview response carries the same headers, annotated or not (A3.2, E3.3).
+fn preview_response(
+    app: &App,
+    bytes: Vec<u8>,
+    content_type: &'static str,
+) -> Result<Response, ApiError> {
+    let mut res = Response::new(Body::from(bytes));
     let h = res.headers_mut();
-    h.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static(content_type(path)),
-    );
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     // Fail closed: if the sandboxing policy cannot be built, serve nothing (S1).
     let csp = preview_csp(&app.cfg.frame_ancestors).ok_or_else(|| {
         tracing::error!("preview CSP could not be built");

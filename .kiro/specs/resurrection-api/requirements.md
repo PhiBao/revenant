@@ -60,3 +60,7 @@ Source: engine requirements R6 and R7.
 - E2.2 (live) WHEN the pipeline asks for a server date THEN the live source SHALL fetch the capture once, keep the body, and answer later requests for that body from memory, so the question costs no extra archive request when the file is then used.
 - E2.3 (live) A missing or unparseable header SHALL give no server date, and the verdict SHALL stand on capture dates alone.
 - E2.4 (live) One live run SHALL still make one set of archive requests for all its restores (L3.4).
+
+- E3.1 `GET /p/{id}/?annotate=1` SHALL serve the annotated page (R8). Without the parameter the page SHALL be served exactly as it is in the ZIP.
+- E3.2 The parameter SHALL have no effect on any file other than the page, on the ZIP, or on the certificate.
+- E3.3 The annotated page SHALL carry the same security headers as any other preview.

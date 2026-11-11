@@ -1,7 +1,25 @@
 import type { Certificate } from "@/lib/api";
-import { formatCapture, formatDelta } from "@/lib/api";
+import { formatCapture, formatDay, formatDelta } from "@/lib/api";
 import { VERDICT_ORDER, VERDICTS } from "@/lib/verdict";
 import { VerdictTag } from "./VerdictTag";
+
+const sentence = (t: string) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+const ended = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`);
+
+/** One plain line saying why a file got its verdict, and what server evidence changed (W6.7). */
+function whyText(f: Certificate["files"][number]): string {
+  const parts: string[] = [];
+  if (f.verdict === "ATTESTED" && f.origin_modified) {
+    parts.push(`the server says it last changed on ${formatDay(f.origin_modified)}`);
+  } else {
+    parts.push(f.basis);
+  }
+  if (f.verdict_from_dates_only !== f.verdict) {
+    parts.push(`capture dates alone said ${VERDICTS[f.verdict_from_dates_only].label.toLowerCase()}`);
+  }
+  const text = parts.map((p) => ended(sentence(p))).join(" ");
+  return f.note ? `${text} ${ended(sentence(f.note))}` : text;
+}
 
 export function Ledger({ cert }: { cert: Certificate }) {
   const counts = VERDICT_ORDER.map((v) => ({
@@ -48,6 +66,7 @@ export function Ledger({ cert }: { cert: Certificate }) {
               </th>
               <td>
                 <VerdictTag verdict={f.verdict} />
+                <span className="why">{whyText(f)}</span>
               </td>
               <td className="col-capture">{formatCapture(f.capture_time)}</td>
               <td className="col-delta">{formatDelta(f.delta_days)}</td>

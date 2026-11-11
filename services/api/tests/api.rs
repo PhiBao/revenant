@@ -546,3 +546,90 @@ async fn nearest_and_strict_agree_file_for_file_on_this_specimen() {
     assert_eq!(files(&strict), files(&near));
     assert_ne!(strict["zip_sha256"], near["zip_sha256"]);
 }
+
+// ------------------------------------------------------------ E3: the annotated page
+
+#[tokio::test]
+async fn the_annotated_page_draws_verdicts_and_marks_the_gaps() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, headers, body) = call(&a, get(&format!("/p/{id}/?annotate=1"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8_lossy(&body);
+    assert_eq!(html.matches("id=\"rv-bar\"").count(), 1);
+    // The six attested images are outlined and tagged with the day the server says they last changed.
+    assert_eq!(
+        html.matches("class=\"rv rv-attested\"").count(),
+        6,
+        "{html}"
+    );
+    assert!(html.contains("attested 1999-12-27"));
+    // The five files that were never archived are labelled gaps, not broken-image icons.
+    assert_eq!(html.matches("class=\"rv-gap rv-missing\"").count(), 5);
+    assert!(html.contains("not archived"));
+    assert!(!html.contains("web.archive.org"));
+    // E3.3: same security headers as any other preview.
+    let csp = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(csp.starts_with("sandbox;"), "{csp}");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+}
+
+#[tokio::test]
+async fn without_the_parameter_the_page_is_exactly_what_is_in_the_zip() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    let (_, _, plain) = call(&a, get(&format!("/p/{id}/"))).await;
+    let text = String::from_utf8_lossy(&plain);
+    assert!(!text.contains("rv-bar") && !text.contains("data-rv-tag") && !text.contains("rv-gap"));
+    // E3.2: asking for the annotated page changes nothing about the stored page or the ZIP.
+    let _ = call(&a, get(&format!("/p/{id}/?annotate=1"))).await;
+    let (_, _, again) = call(&a, get(&format!("/p/{id}/"))).await;
+    assert_eq!(plain, again);
+    let (_, _, zip) = call(&a, get(&format!("/api/resurrections/{id}/archive.zip"))).await;
+    let mut hasher = std::process::Command::new("sha256sum")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    hasher.stdin.take().unwrap().write_all(&zip).unwrap();
+    let out = hasher.wait_with_output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .next()
+            .unwrap(),
+        v["zip_sha256"]
+    );
+}
+
+#[tokio::test]
+async fn the_annotate_parameter_does_not_reach_other_files() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    let (_, _, plain) = call(&a, get(&format!("/p/{id}/images/1.gif"))).await;
+    let (status, _, with) = call(&a, get(&format!("/p/{id}/images/1.gif?annotate=1"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(plain, with);
+}
+
+#[tokio::test]
+async fn other_values_of_the_annotate_parameter_give_the_plain_page() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    for q in [
+        "annotate=0",
+        "annotate=true",
+        "annotate=",
+        "annotate=1%00",
+        "annotate[]=1",
+    ] {
+        let (status, _, body) = call(&a, get(&format!("/p/{id}/?{q}"))).await;
+        assert_eq!(status, StatusCode::OK, "{q}");
+        assert!(!String::from_utf8_lossy(&body).contains("rv-bar"), "{q}");
+    }
+}

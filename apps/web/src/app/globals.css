@@ -606,6 +606,7 @@ input[type="date"]:disabled {
   font-size: 0.85em;
 }
 .tag-proven,
+.tag-attested,
 .tag-likely {
   color: var(--life);
 }
@@ -620,6 +621,83 @@ input[type="date"]:disabled {
 }
 .tag-unknown {
   color: var(--silent);
+}
+
+.why {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--dust);
+  max-width: 34ch;
+  white-space: normal;
+}
+
+.delta {
+  margin: 1.4rem 0 0;
+  padding: 1rem 1.2rem 1.1rem;
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--life);
+  background: var(--slab);
+}
+.delta-title {
+  margin: 0 0 0.7rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dust);
+}
+.delta-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.4rem;
+}
+.delta-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--dust);
+}
+.delta-num {
+  display: block;
+  font-family: var(--display);
+  font-size: 2.4rem;
+  line-height: 1.1;
+  font-variation-settings: "opsz" 144;
+  font-variant-numeric: tabular-nums;
+}
+.delta-before {
+  color: var(--wrong);
+}
+.delta-after {
+  color: var(--life);
+}
+.delta-arrow {
+  font-size: 1.6rem;
+  color: var(--faint);
+  padding-bottom: 0.25rem;
+}
+.delta-body {
+  margin: 0.9rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--dust);
+  max-width: 62ch;
+}
+
+.agree .single {
+  margin-top: 1.2rem;
+}
+.solo-frame {
+  display: block;
+  width: 100%;
+  height: min(70vh, 560px);
+  min-height: 380px;
+  border: 1px solid var(--rule-strong);
+  background: #fff;
+}
+.curtain-solo {
+  color: var(--life);
 }
 
 .legend {
@@ -928,6 +1006,18 @@ input[type="date"]:disabled {
   }
   .col-capture {
     display: none;
+  }
+  .delta-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+  .delta-arrow {
+    transform: rotate(90deg);
+    padding: 0;
+  }
+  .why {
+    max-width: none;
   }
   .seg {
     grid-template-columns: 1fr;

@@ -10,11 +10,13 @@ import {
   type Example,
   type Failure,
   type Job,
+  sameRestore,
 } from "@/lib/api";
 import { Certificate } from "@/components/Certificate";
 import { Curtain } from "@/components/Curtain";
 import { DeathCertificate } from "@/components/DeathCertificate";
 import { Ekg } from "@/components/Ekg";
+import { EvidenceDelta } from "@/components/EvidenceDelta";
 import { Ledger } from "@/components/Ledger";
 import { Mark } from "@/components/Mark";
 import { Vitals } from "@/components/Vitals";
@@ -25,15 +27,23 @@ const SAMPLE_LIVE = { url: "http://www.y2k.gov/briefings.html", date: "2000-03-0
 type Phase = "idle" | "loading" | "autopsy" | "failed";
 type Source = "specimen" | "live";
 
-/** The one-sentence finding shown above the ledger. Built only from the certificate. */
+/** The finding shown above the ledger. Built only from the certificate. */
 function finding(cert: Cert, date: string): string {
   const total = cert.files.length;
   const survive = cert.files.filter((f) => f.verdict !== "MISSING" && f.verdict !== "UNKNOWN").length;
+  const attested = cert.files.filter((f) => f.verdict === "ATTESTED").length;
   const later = cert.files.filter((f) => f.verdict === "ANACHRONISM").length;
   const unknown = cert.files.filter((f) => f.verdict === "UNKNOWN").length;
   const parts = [`${survive} of the ${total} files this page uses survive in the archive.`];
+  if (attested > 0) {
+    parts.push(
+      `${attested} ${attested === 1 ? "was" : "were"} saved after ${date}, but the server's own dates show ${attested === 1 ? "it" : "they"} had not changed since before.`,
+    );
+  }
   if (later > 0) {
-    parts.push(`${later} of them were first captured after ${date}, so they may not match the page as it was that day.`);
+    parts.push(
+      `${later} ${later === 1 ? "was" : "were"} first captured after ${date} with nothing to show ${later === 1 ? "it" : "they"} existed then.`,
+    );
   }
   if (unknown > 0) {
     parts.push(
@@ -43,6 +53,11 @@ function finding(cert: Cert, date: string): string {
   const first = cert.files[0];
   if (first?.verdict === "UNCERTAIN") {
     parts.push("The page itself changed around that date, so its exact text on the day cannot be proven.");
+  }
+  if (first?.verdict === "ATTESTED" && first.verdict_from_dates_only === "UNCERTAIN") {
+    parts.push(
+      "The page was replaced earlier that day. The newer copy is the true one, and the older copy the archive saved before it was already out of date.",
+    );
   }
   return parts.join(" ");
 }
@@ -134,7 +149,7 @@ export default function Home() {
         setProgress((p) => ({ ...p, strict: true }));
         return j;
       });
-      const nearestP = createJob(example.id, day, "include-anachronisms").then((j) => {
+      const nearestP = createJob(example.id, day, "nearest").then((j) => {
         setProgress((p) => ({ ...p, nearest: true }));
         return j;
       });
@@ -231,8 +246,11 @@ export default function Home() {
   };
 
   const busy = phase === "loading";
-  const later =
-    nearest?.certificate.files.filter((f) => f.included && f.verdict === "ANACHRONISM").length ?? 0;
+  const agree = strict && nearest ? sameRestore(strict.certificate, nearest.certificate) : false;
+  const playbackOnly =
+    nearest?.certificate.files.filter(
+      (f) => f.included && !(strict?.certificate.files.find((g) => g.path === f.path)?.included),
+    ).length ?? 0;
   const resultIsLive = strict?.mode === "LIVE";
 
   return (
@@ -429,7 +447,7 @@ export default function Home() {
                 <li className={progress.strict ? "done" : ""}>
                   Reading the archive and classifying every file
                 </li>
-                <li className={progress.nearest ? "done" : ""}>Preparing the comparison restore</li>
+                <li className={progress.nearest ? "done" : ""}>Preparing what archive playback would give</li>
               </ol>
             ) : (
               <button type="submit" className="btn btn-primary">
@@ -466,7 +484,7 @@ export default function Home() {
             <code>
               {strict.certificate.site}/{strict.certificate.page}
             </code>{" "}
-            as of <strong>{strict.date}</strong>
+            as of the end of <strong>{strict.date}</strong> (UTC)
             <span className="stamp stamp-inline">{strict.mode}</span>
           </p>
           {notes.map((n) => (
@@ -475,6 +493,7 @@ export default function Home() {
             </p>
           ))}
           <Vitals cert={strict.certificate} />
+          <EvidenceDelta cert={strict.certificate} />
           <p className="finding">{finding(strict.certificate, strict.date)}</p>
           <Ledger cert={strict.certificate} />
 
@@ -498,18 +517,45 @@ export default function Home() {
               The resurrection
             </h2>
           </div>
-          <p className="finding">
-            Left: every file taken from the capture nearest in time, whatever its date. Right: only
-            what can be shown as it was on <strong>{strict.date}</strong>.
-            {later > 0
-              ? ` The left page looks more complete, but ${later} of its files were captured after that day.`
-              : ""}
-          </p>
-          <Curtain
-            nearestUrl={nearest.urls.preview}
-            dayUrl={strict.urls.preview}
-            dayLabel={`As it was on ${strict.date}`}
-          />
+          {agree ? (
+            <div className="agree">
+              <p className="finding">
+                Archive playback and Revenant give the <strong>same page</strong> here, file for file.
+              </p>
+              <p className="fine">
+                So there is nothing to put side by side. What differs is what you know. Playback
+                would have shown you this page with no way to tell whether its files belong to{" "}
+                {strict.date}. Revenant can: every file in the ledger above says why it is trusted,
+                and the first row shows the page itself was checked, not assumed.
+              </p>
+              <div className="single">
+                <p className="curtain-labels">
+                  <span className="curtain-solo">As it was on {strict.date}</span>
+                </p>
+                <iframe
+                  className="solo-frame"
+                  src={`${strict.urls.preview}?annotate=1`}
+                  title={`Restoration as it was on ${strict.date}`}
+                  sandbox=""
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="finding">
+                Left: what archive playback gives, the capture closest in time for every file. Right:
+                only what can be shown as it was on <strong>{strict.date}</strong>.
+                {playbackOnly > 0
+                  ? ` The left page contains ${playbackOnly} ${playbackOnly === 1 ? "file" : "files"} Revenant cannot vouch for.`
+                  : ""}
+              </p>
+              <Curtain
+                nearestUrl={nearest.urls.preview}
+                dayUrl={`${strict.urls.preview}?annotate=1`}
+                dayLabel={`What can be shown as it was on ${strict.date}`}
+              />
+            </>
+          )}
         </section>
       ) : null}
 
