@@ -40,6 +40,10 @@ pub struct Config {
     pub rate_window: Duration,
     /// Read the client address from `X-Forwarded-For`. Only enable behind a trusted proxy.
     pub trust_proxy: bool,
+    /// How many trusted proxies sit in front, counted from the right of `X-Forwarded-For` (A1.6).
+    pub proxy_hops: usize,
+    /// Upper bound on the bytes of all retained jobs (A1.7).
+    pub max_job_bytes: usize,
     pub frame_ancestors: String,
     /// The one archive host live mode may contact (L1.2).
     pub archive_base: String,
@@ -60,6 +64,8 @@ impl Default for Config {
             rate_limit: 30,
             rate_window: Duration::from_secs(60),
             trust_proxy: false,
+            proxy_hops: 1,
+            max_job_bytes: 64 * 1024 * 1024,
             frame_ancestors: "'self'".to_string(),
             archive_base: "https://web.archive.org".to_string(),
             archive_gap: Duration::from_millis(1200),
@@ -95,6 +101,19 @@ struct Example {
     source: Arc<SeededSource>,
 }
 
+impl Job {
+    /// Bytes this job keeps in memory: the ZIP plus the files used for previews.
+    fn weight(&self) -> usize {
+        self.result.zip.len()
+            + self
+                .result
+                .entries
+                .iter()
+                .map(|e| e.bytes.len())
+                .sum::<usize>()
+    }
+}
+
 struct Job {
     example_id: String,
     date: String,
@@ -108,6 +127,17 @@ struct Job {
 struct Store {
     map: HashMap<String, Arc<Job>>,
     order: VecDeque<String>,
+    /// Sum of `Job::weight()` over `map`.
+    bytes: usize,
+}
+
+impl Store {
+    fn remove(&mut self, id: &str) {
+        if let Some(job) = self.map.remove(id) {
+            self.bytes = self.bytes.saturating_sub(job.weight());
+        }
+        self.order.retain(|o| o != id);
+    }
 }
 
 enum RunState {
@@ -180,7 +210,7 @@ impl App {
     fn insert(&self, id: String, job: Job) {
         let mut store = self.jobs.lock().expect("job store lock");
         let ttl = self.cfg.job_ttl;
-        // Drop expired jobs, then make room.
+        // Drop expired jobs, then make room by count and by bytes (A1.4, A1.7).
         let expired: Vec<String> = store
             .map
             .iter()
@@ -188,17 +218,18 @@ impl App {
             .map(|(k, _)| k.clone())
             .collect();
         for k in expired {
-            store.map.remove(&k);
-            store.order.retain(|o| o != &k);
+            store.remove(&k);
         }
-        while store.map.len() >= self.cfg.max_jobs {
-            match store.order.pop_front() {
-                Some(old) => {
-                    store.map.remove(&old);
-                }
+        let weight = job.weight();
+        while store.map.len() >= self.cfg.max_jobs
+            || (store.bytes + weight > self.cfg.max_job_bytes && !store.map.is_empty())
+        {
+            match store.order.front().cloned() {
+                Some(old) => store.remove(&old),
                 None => break,
             }
         }
+        store.bytes += weight;
         store.order.push_back(id.clone());
         store.map.insert(id, Arc::new(job));
     }
@@ -207,8 +238,7 @@ impl App {
         let mut store = self.jobs.lock().expect("job store lock");
         let job = store.map.get(id)?.clone();
         if job.created.elapsed() >= self.cfg.job_ttl {
-            store.map.remove(id);
-            store.order.retain(|o| o != id);
+            store.remove(id);
             return None;
         }
         Some(job)
@@ -371,11 +401,13 @@ pub fn router(app: Arc<App>) -> Router {
 
 async fn client_key(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Response {
     let forwarded = if app.cfg.trust_proxy {
-        req.headers()
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .map(|s| s.trim().to_string())
+        let values: Vec<&str> = req
+            .headers()
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        forwarded_client(&values, app.cfg.proxy_hops)
     } else {
         None
     };
@@ -388,6 +420,27 @@ async fn client_key(State(app): State<Arc<App>>, mut req: Request, next: Next) -
         .unwrap_or_else(|| "unknown".to_string());
     req.extensions_mut().insert(ClientKey(key));
     next.run(req).await
+}
+
+/// The client address from `X-Forwarded-For`, trusting `hops` proxies from the right (A1.6).
+///
+/// Each proxy appends the address it saw, so the right-most entries are written by proxies we
+/// trust and the left-most are written by the client. `hops = 1` takes the last entry.
+pub fn forwarded_client(header_values: &[&str], hops: usize) -> Option<String> {
+    if hops == 0 {
+        return None;
+    }
+    let entries: Vec<&str> = header_values
+        .iter()
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .collect();
+    let entry = entries.get(entries.len().checked_sub(hops)?)?;
+    entry
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| ip.to_string())
 }
 
 async fn security_headers(req: Request, next: Next) -> Response {
@@ -931,6 +984,44 @@ mod tests {
         assert_eq!(content_type("a.svg"), "application/octet-stream");
         assert_eq!(content_type("a.exe"), "application/octet-stream");
         assert_eq!(content_type("noext"), "application/octet-stream");
+    }
+
+    #[test]
+    fn the_client_address_comes_from_the_right_not_the_left() {
+        // A client sends "1.2.3.4"; the one trusted proxy appends the address it saw.
+        let h = ["1.2.3.4, 203.0.113.9"];
+        assert_eq!(forwarded_client(&h, 1).as_deref(), Some("203.0.113.9"));
+        // Two trusted proxies: the second-from-right is the client as the outer proxy saw it.
+        assert_eq!(
+            forwarded_client(&["1.2.3.4, 203.0.113.9, 10.0.0.1"], 2).as_deref(),
+            Some("203.0.113.9")
+        );
+        // Separate header lines are joined in order.
+        assert_eq!(
+            forwarded_client(&["1.2.3.4", "203.0.113.9"], 1).as_deref(),
+            Some("203.0.113.9")
+        );
+    }
+
+    #[test]
+    fn unusable_forwarded_headers_are_ignored() {
+        assert_eq!(forwarded_client(&[], 1), None);
+        assert_eq!(forwarded_client(&["203.0.113.9"], 0), None);
+        assert_eq!(
+            forwarded_client(&["203.0.113.9"], 2),
+            None,
+            "too few entries"
+        );
+        assert_eq!(forwarded_client(&["1.2.3.4, not-an-ip"], 1), None);
+        assert_eq!(forwarded_client(&["1.2.3.4, <script>"], 1), None);
+        assert_eq!(
+            forwarded_client(&["1.2.3.4, "], 1).as_deref(),
+            Some("1.2.3.4")
+        );
+        assert_eq!(
+            forwarded_client(&["2001:db8::1"], 1).as_deref(),
+            Some("2001:db8::1")
+        );
     }
 
     #[test]

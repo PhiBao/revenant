@@ -10,6 +10,8 @@ primary_region = "iad"
   PORT = "8080"
   # Fly terminates TLS and forwards the visitor's address in X-Forwarded-For.
   REVENANT_TRUST_PROXY = "1"
+  # One trusted proxy (Fly's) sits in front. The client address is the last X-Forwarded-For entry.
+  REVENANT_PROXY_HOPS = "1"
 
 [http_service]
   internal_port = 8080

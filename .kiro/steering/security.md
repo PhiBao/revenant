@@ -7,3 +7,5 @@
 - Rights: the UI requires an ownership or rights assertion before a live run. Previews are unlisted and expire. Do not log full user URLs with query secrets.
 - Secrets: never commit tokens. Use environment variables. Scan the diff before each commit.
 - Archive politeness: serial lookups with at least 1.2 s between requests, Retry-After backoff, a descriptive User-Agent, and 403/429/timeouts classified as UNKNOWN or BLOCKED, never MISSING.
+- Client address behind a proxy: take the `X-Forwarded-For` entry counted from the RIGHT by the number of trusted proxies (`REVENANT_PROXY_HOPS`, default 1). The left-most entry is written by the client and must never be used. Too few hops makes visitors share one limit (safe). Too many makes the limit spoofable (unsafe).
+- Memory: retained jobs are capped by count and by total bytes (A1.7), not by count alone.

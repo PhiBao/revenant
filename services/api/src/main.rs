@@ -18,6 +18,12 @@ async fn main() {
     }
     cfg.web_dir = std::env::var("REVENANT_WEB_DIR").ok().map(PathBuf::from);
     cfg.trust_proxy = std::env::var("REVENANT_TRUST_PROXY").as_deref() == Ok("1");
+    if let Some(hops) = std::env::var("REVENANT_PROXY_HOPS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        cfg.proxy_hops = hops;
+    }
     if let Ok(v) = std::env::var("REVENANT_FRAME_ANCESTORS") {
         cfg.frame_ancestors = v;
     }

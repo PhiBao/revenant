@@ -8,6 +8,8 @@ Source: PLAN.md §12.7 and §12.8, as amended by §R. Format: EARS.
 - A1.3 WHEN the pipeline finds no usable capture THEN the system SHALL answer 422 with code `no_capture`, the verdict, and a next step. It SHALL NOT store a job.
 - A1.4 Job ids SHALL be 128-bit random values. Jobs SHALL expire after one hour, and at most 500 jobs SHALL be held, oldest evicted first.
 - A1.5 WHEN a client sends more than 30 POSTs a minute from one address THEN the system SHALL answer 429 with `Retry-After`.
+- A1.6 (security review, Nov 11 2026) WHEN the server runs behind trusted proxies THEN the client address SHALL be the `X-Forwarded-For` entry that the nearest trusted proxy appended, counted from the right by the configured number of hops. The left-most entry SHALL NOT be used, because the client controls it. An entry that is not an IP address, or a header with too few entries, SHALL be ignored in favour of the socket address. WHEN no proxy is trusted THEN `X-Forwarded-For` SHALL be ignored.
+- A1.7 (security review, Nov 11 2026) The total size of retained jobs SHALL NOT exceed a configured budget (default 64 MiB). WHEN a new job would exceed it THEN the oldest jobs SHALL be evicted first.
 
 ## A2 Downloads
 - A2.1 `GET /api/resurrections/{id}` SHALL return the certificate and URLs, or 404 for an unknown or expired id.

@@ -73,7 +73,7 @@ Live runs and seeded runs use the same pipeline. Only the `SnapshotSource` diffe
 - **The address you type is never fetched.** Its host and path are sent, percent-encoded, as a query to the archive's index. All outgoing requests go to one configured host. Redirects that leave that host are refused. IP addresses, `localhost`, single-label hosts, user info and non-http schemes are rejected before any request.
 - **Previews cannot run script or reach the API.** Restored pages are served only under `/p/`, with `Content-Security-Policy: sandbox; default-src 'none'`, `nosniff`, `no-referrer` and `noindex`. Scripts and inline handlers are removed. Only files in a job's own ZIP are served, and content types come from an allowlist. The JSON API never serves restored HTML.
 - **ZIPs are safe to open.** Entry paths are validated (no `..`, absolute paths, backslashes or drive prefixes). Counts and bytes are capped.
-- **Abuse limits.** Request bodies are capped at 16 KiB. Seeded and live runs have separate rate limits. At most two live runs execute at once. Jobs expire after an hour. Live runs are capped at 40 files and 8 MiB.
+- **Abuse limits.** Request bodies are capped at 16 KiB. Seeded and live runs have separate rate limits, keyed on an address a client cannot spoof. At most two live runs execute at once. Jobs expire after an hour and are capped by count and by total bytes. Live runs are capped at 40 files and 8 MiB.
 - **Politeness.** One archive request at a time, at least 1.2 seconds apart, with a descriptive User-Agent and a single `Retry-After`-aware retry.
 - **Rights.** A live run requires ticking a box that says the site is yours or you may restore it. What the archive holds stays the property of its owners.
 
@@ -91,11 +91,11 @@ cargo run -p revenant-api               # API on :8080
 pnpm --dir apps/web install && pnpm --dir apps/web dev   # web on :3000, proxies to the API
 
 # everything
-bash scripts/verify.sh                  # format, clippy, 122 Rust tests, web typecheck/lint/build, end to end
+bash scripts/verify.sh                  # format, clippy, 128 Rust tests, web typecheck/lint/build, end to end
 bash scripts/verify.sh --quick          # Rust only
 ```
 
-Settings, all optional: `PORT`, `REVENANT_FIXTURES`, `REVENANT_WEB_DIR`, `REVENANT_TRUST_PROXY=1` (only behind a proxy you control), `REVENANT_FRAME_ANCESTORS`. None is a secret.
+Settings, all optional: `PORT`, `REVENANT_FIXTURES`, `REVENANT_WEB_DIR`, `REVENANT_TRUST_PROXY=1` with `REVENANT_PROXY_HOPS=<n>` (only behind proxies you control; the client address is read from the right of `X-Forwarded-For`), `REVENANT_FRAME_ANCESTORS`. None is a secret.
 
 ## What is real, and what is stored
 

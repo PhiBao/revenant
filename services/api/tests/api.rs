@@ -369,3 +369,106 @@ async fn the_certificate_file_is_served_as_json() {
     assert_eq!(h[header::CONTENT_TYPE], "application/json");
     assert_eq!(as_json(&body)["schema"], "revenant.certificate/1");
 }
+
+// ------------------------------------------------------------ security review (A1.6, A1.7)
+
+fn post_from(forwarded: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/api/resurrections")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-forwarded-for", forwarded)
+        .body(Body::from(
+            r#"{"example":"y2k-briefings","date":"2000-03-02"}"#,
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_spoofed_left_most_forwarded_address_does_not_evade_the_rate_limit() {
+    let a = app(Config {
+        trust_proxy: true,
+        rate_limit: 3,
+        ..config()
+    });
+    // Same client as the proxy saw it (last entry), a different fake first entry every time.
+    let mut statuses = Vec::new();
+    for i in 0..5 {
+        let (status, _, _) = call(&a, post_from(&format!("10.0.0.{i}, 203.0.113.9"))).await;
+        statuses.push(status);
+    }
+    assert_eq!(
+        statuses,
+        [
+            StatusCode::CREATED,
+            StatusCode::CREATED,
+            StatusCode::CREATED,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::TOO_MANY_REQUESTS
+        ]
+    );
+}
+
+#[tokio::test]
+async fn different_real_clients_behind_the_proxy_have_separate_limits() {
+    let a = app(Config {
+        trust_proxy: true,
+        rate_limit: 1,
+        ..config()
+    });
+    assert_eq!(
+        call(&a, post_from("198.51.100.1")).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        call(&a, post_from("198.51.100.2")).await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        call(&a, post_from("198.51.100.1")).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[tokio::test]
+async fn forwarded_headers_are_ignored_when_no_proxy_is_trusted() {
+    let a = app(Config {
+        trust_proxy: false,
+        rate_limit: 2,
+        ..config()
+    });
+    // Without a trusted proxy every request shares the socket address, whatever it claims.
+    assert_eq!(call(&a, post_from("1.1.1.1")).await.0, StatusCode::CREATED);
+    assert_eq!(call(&a, post_from("2.2.2.2")).await.0, StatusCode::CREATED);
+    assert_eq!(
+        call(&a, post_from("3.3.3.3")).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[tokio::test]
+async fn retained_jobs_stay_within_the_byte_budget() {
+    // One include-anachronisms job is about 70 KB (ZIP plus the files kept for previews).
+    let a = app(Config {
+        max_job_bytes: 200 * 1024,
+        rate_limit: 1000,
+        ..config()
+    });
+    let mut ids = Vec::new();
+    for _ in 0..6 {
+        let v = create(&a, "2000-03-02", "include-anachronisms").await;
+        ids.push(v["id"].as_str().unwrap().to_string());
+    }
+    let mut alive = 0;
+    for id in &ids {
+        if call(&a, get(&format!("/api/resurrections/{id}"))).await.0 == StatusCode::OK {
+            alive += 1;
+        }
+    }
+    assert!((1..6).contains(&alive), "{alive} of 6 jobs are still held");
+    // The newest job is always kept, and the oldest is the first to go.
+    let (newest, _, _) = call(&a, get(&format!("/api/resurrections/{}", ids[5]))).await;
+    let (oldest, _, _) = call(&a, get(&format!("/api/resurrections/{}", ids[0]))).await;
+    assert_eq!(newest, StatusCode::OK);
+    assert_eq!(oldest, StatusCode::NOT_FOUND);
+}

@@ -13,3 +13,8 @@ services:
       # X-Forwarded-For. Only valid because the container is reachable only through that proxy.
       - key: REVENANT_TRUST_PROXY
         value: "1"
+      # Hops from the right of X-Forwarded-For that belong to proxies you trust. Render runs behind
+      # its own edge, so check a real request's header and raise this if visitors share one limit.
+      # Too low is safe (they share a limit). Too high lets a client spoof its address.
+      - key: REVENANT_PROXY_HOPS
+        value: "1"
