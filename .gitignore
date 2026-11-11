@@ -1,4 +1,4 @@
-# Build outputs and local data. Never ignore .kiro/ (see PLAN.md §1.4).
+# Build outputs and local data only.
 /target
 /data
 /.env
