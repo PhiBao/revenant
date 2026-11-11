@@ -40,3 +40,12 @@ Source: PLAN.md §12.7 and §12.8, as amended by §R. Format: EARS.
 - L3.4 The strict and the nearest-capture jobs of one run SHALL be built from one set of archive requests, so a run costs the archive no more than a single restore.
 - L4.1 Every live result SHALL carry mode `LIVE`. Seeded results SHALL keep `SEEDED`.
 - L5.1 For live runs the system SHALL ask the index for the last capture at or before the target and the first capture after it, and SHALL NOT download the full capture list of a file.
+
+## S Findings from the reviewer agent (Nov 11, 2026)
+
+Found by running `revenant-reviewer` read-only over the live and preview code. Each was reproduced or read at the cited line before it was accepted.
+
+- S1 (fail closed) WHEN the preview CSP cannot be built THEN the system SHALL answer 500 and SHALL NOT serve the file. WHEN `frame_ancestors` is not a valid header value THEN the server SHALL refuse to start.
+- S2 (L1.3, tightened) The system SHALL reject a host whose last label starts with an ASCII digit, so forms such as `0x7f.0x1`, `1.2.3.4`, `127.1` and `0177.0.0.1` are all refused.
+- S3 (no internal detail) Error responses SHALL carry fixed messages. Debug output and transport errors SHALL go to the log, not to the client.
+- S4 (accepted, documented) A single client can still fill the job store (findings 2 to 4 of the review). This is listed under Limitations in the README. A per-client job quota is future work.

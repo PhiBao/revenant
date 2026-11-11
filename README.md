@@ -91,7 +91,7 @@ cargo run -p revenant-api               # API on :8080
 pnpm --dir apps/web install && pnpm --dir apps/web dev   # web on :3000, proxies to the API
 
 # everything
-bash scripts/verify.sh                  # format, clippy, 128 Rust tests, web typecheck/lint/build, end to end
+bash scripts/verify.sh                  # format, clippy, 131 Rust tests, web typecheck/lint/build, end to end
 bash scripts/verify.sh --quick          # Rust only
 ```
 
@@ -102,7 +102,7 @@ Settings, all optional: `PORT`, `REVENANT_FIXTURES`, `REVENANT_WEB_DIR`, `REVENA
 - **`SEEDED`**: files come from saved copies of archive data in `fixtures/snapshots/`. The dates, digests and bytes are the archive's. Each fixture has a `PROVENANCE.md` with its rights basis.
 - **`LIVE`**: files were fetched from the Internet Archive during the run.
 - The label comes from the server's `SnapshotSource`, not from the page.
-- The stored specimen is part of Y2K.gov, a US federal government site. Its domain no longer resolves. US government works are in the public domain (17 U.S.C. §105).
+- The stored specimen is part of Y2K.gov, a US federal government site. Its domain no longer resolves. Works made by US federal employees are not under copyright (17 U.S.C. §105). Revenant has not confirmed who made each graphic on the page, and government sites sometimes use contractors' work, so treat the rights status as likely rather than proven. The pages carry no copyright notice. If you hold rights in anything in the fixture and want it removed, open an issue and it will be.
 - Tests for live behavior run against a local fake archive that serves the real fixture and misbehaves on demand (rate limits, 403, 500, off-host redirects, oversize bodies). They never contact the real archive.
 
 ## Limitations
@@ -113,10 +113,11 @@ Settings, all optional: `PORT`, `REVENANT_FIXTURES`, `REVENANT_WEB_DIR`, `REVENA
 - **A verdict is about capture dates.** `ANACHRONISM` means the only capture is later than the date, not that the file did not exist. Revenant does not yet use the origin server's own `Last-Modified` header, which would sharpen this.
 - **Live depends on the archive.** It can be slow, refuse requests, or hold nothing. Revenant says so instead of guessing.
 - **Jobs are in memory** and expire after an hour. A restart clears them.
+- **No per-client quotas.** Job storage is capped by count and by total bytes, but not per client. One determined client can fill it and push other visitors' jobs out early. One client can also hold both live-run slots for a few minutes. Rate limits are keyed on the full address, so an IPv6 client with a whole /64 can use many addresses. All three were found by the reviewer agent (`.kiro/specs/resurrection-api/requirements.md`, S4). They matter for a public service. They do not let anyone read another visitor's data, because job ids are 128-bit random values.
 
 ## Roadmap
 
-Following links to restore a few pages of one site at a time, with the date held fixed across pages. Using the origin's `Last-Modified` header as a second signal. A second archive behind the same trait (Arquivo.pt answers the same index queries). A tool server so Kiro can restore a page conversationally. Link-rot watching that saves a page before it dies.
+Per-client job and live-run quotas, and IPv6 rate limits keyed on the /64 prefix. Following links to restore a few pages of one site at a time, with the date held fixed across pages. Using the origin's `Last-Modified` header as a second signal. A second archive behind the same trait (Arquivo.pt answers the same index queries). A tool server so Kiro can restore a page conversationally. Link-rot watching that saves a page before it dies.
 
 ## Hackathon notes
 

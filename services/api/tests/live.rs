@@ -472,10 +472,16 @@ async fn redirects_off_the_archive_host_are_refused() {
     let v = finish(&app, &id).await;
     assert_eq!(v["status"], "failed");
     assert_eq!(v["error"]["code"], "archive_unavailable");
-    assert!(v["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("another host"));
+    // The reason is logged, not sent to the client (S3).
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("not the same as nothing being there"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("another host") && !message.contains("evil"),
+        "{message}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -555,4 +561,40 @@ async fn seeded_results_stay_labelled_seeded() {
     let (status, _, bytes) = call(&app, req).await;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(as_json(&bytes)["mode"], "SEEDED");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_spelling_of_an_ip_address_is_refused() {
+    let (base, fake) = spawn_fake(Behavior::default()).await;
+    let app = app_for(Config {
+        live_rate_limit: 100,
+        ..config(&base)
+    });
+    for url in [
+        "http://0x7f.0x1/",
+        "http://0177.0.0.1/",
+        "http://127.1/",
+        "http://1.2.3.4/",
+        "http://017700000001/",
+    ] {
+        let (status, _, bytes) = call(&app, post_live(good(url, "2000-03-02"))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{url}");
+        assert_eq!(as_json(&bytes)["error"]["code"], "bad_url", "{url}");
+    }
+    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transport_errors_never_reach_the_client() {
+    let (base, _) = spawn_fake(Behavior {
+        cdx_status: Some(500),
+        ..Behavior::default()
+    })
+    .await;
+    let app = app_for(config(&base));
+    let id = start(&app, good(PAGE, "2000-03-02")).await;
+    let text = finish(&app, &id).await.to_string();
+    for leak in ["HTTP 500", "network error", "127.0.0.1", "Os {", "ureq"] {
+        assert!(!text.contains(leak), "response leaked {leak:?}: {text}");
+    }
 }

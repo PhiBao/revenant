@@ -555,8 +555,9 @@ export default function Home() {
             followed. Restored files are held for an hour.
           </li>
           <li>
-            The stored specimen is a US federal government work and in the public domain. Its
-            provenance is in the repository.
+            The stored specimen comes from a US federal government site. Federal employees&rsquo;
+            work is not under copyright, but the authorship of each graphic is not confirmed. Its
+            provenance note is in the repository.
           </li>
         </ul>
         <p className="fine">

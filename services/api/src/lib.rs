@@ -190,6 +190,10 @@ impl App {
                 source: Arc::new(source),
             });
         }
+        // The preview CSP is built from this value on every request, so a bad value would
+        // silently remove the sandbox. Refuse to start instead (S1).
+        preview_csp(&cfg.frame_ancestors)
+            .ok_or_else(|| "REVENANT_FRAME_ANCESTORS is not a valid header value".to_string())?;
         let archive = live::ArchiveClient::new(&cfg.archive_base, cfg.archive_gap)?;
         Ok(Arc::new(Self {
             cfg,
@@ -581,7 +585,7 @@ async fn create(
             return Err(ApiError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "cannot_restore",
-                format!("{other:?}"),
+                "This page could not be restored.",
             ));
         }
     };
@@ -669,14 +673,16 @@ fn serve_entry(app: &App, job: &Job, path: &str) -> Result<Response, ApiError> {
         header::CONTENT_TYPE,
         HeaderValue::from_static(content_type(path)),
     );
-    let csp = format!(
-        "sandbox; default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
-         font-src 'self'; frame-ancestors {}",
-        app.cfg.frame_ancestors
-    );
-    if let Ok(v) = HeaderValue::from_str(&csp) {
-        h.insert(header::CONTENT_SECURITY_POLICY, v);
-    }
+    // Fail closed: if the sandboxing policy cannot be built, serve nothing (S1).
+    let csp = preview_csp(&app.cfg.frame_ancestors).ok_or_else(|| {
+        tracing::error!("preview CSP could not be built");
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "The preview could not be served safely.",
+        )
+    })?;
+    h.insert(header::CONTENT_SECURITY_POLICY, csp);
     h.insert(
         header::HeaderName::from_static("x-robots-tag"),
         HeaderValue::from_static("noindex, nofollow"),
@@ -846,14 +852,20 @@ fn map_pipeline_error(e: PipelineError) -> (&'static str, String) {
             format!("The archive has nothing usable for this page at that date. {detail}"),
         ),
         // A failed lookup is not "no capture" (L2.2).
-        PipelineError::PageUnknown(why) => (
-            "archive_unavailable",
-            format!("The archive could not be reached for this page: {why}"),
-        ),
-        PipelineError::Source(why) => (
-            "archive_unavailable",
-            format!("The archive could not supply the page: {why}"),
-        ),
+        PipelineError::PageUnknown(why) => {
+            tracing::warn!(%why, "archive did not answer for the page");
+            (
+                "archive_unavailable",
+                "The archive could not be reached for this page. This is not the same as nothing being there.".to_string(),
+            )
+        }
+        PipelineError::Source(why) => {
+            tracing::warn!(%why, "archive could not supply the page");
+            (
+                "archive_unavailable",
+                "The archive could not supply this page. This is not the same as nothing being there.".to_string(),
+            )
+        }
         PipelineError::TooManyAssets { found, cap } => (
             "too_many_assets",
             format!("This page uses {found} files. Live restores are limited to {cap}."),
@@ -865,7 +877,13 @@ fn map_pipeline_error(e: PipelineError) -> (&'static str, String) {
                 cap_bytes / (1024 * 1024)
             ),
         ),
-        other => ("cannot_restore", format!("{other:?}")),
+        other => {
+            tracing::warn!(error = ?other, "live pipeline error");
+            (
+                "cannot_restore",
+                "This page could not be restored.".to_string(),
+            )
+        }
     }
 }
 
@@ -902,6 +920,18 @@ async fn live_show(
 }
 
 // ---------------------------------------------------------------- helpers
+
+/// The sandboxing policy for previews. `None` when `frame_ancestors` cannot form a valid header.
+fn preview_csp(frame_ancestors: &str) -> Option<HeaderValue> {
+    if frame_ancestors.chars().any(|c| c.is_control() || c == ';') {
+        return None;
+    }
+    HeaderValue::from_str(&format!(
+        "sandbox; default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+         font-src 'self'; frame-ancestors {frame_ancestors}"
+    ))
+    .ok()
+}
 
 /// Content types are an allowlist. Everything else is a download (A3.3).
 fn content_type(path: &str) -> &'static str {

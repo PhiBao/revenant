@@ -1,15 +1,67 @@
 # How Kiro was used
 
-This write-up follows the eight prompts in the Kiroween 2026 rules. Each section will point to file paths and dated evidence once the milestone producing that evidence is done.
+This follows the eight questions in the Kiroween 2026 rules. Each answer says what was done, points to files, and says what was not done. The dated evidence log at the end has the details.
 
-1. Kiro surfaces used and how they differed: pending (M1 onward).
-2. Custom agents: pending.
-3. Agent hooks: pending.
-4. Spec-driven development: pending. Specs will live in `.kiro/specs/`.
-5. Steering docs: `.kiro/steering/` (product, tech, structure, security, testing), created in M0.
-6. MCP: pending (`revenant-mcp` and the Devpost MCP).
-7. Property-based testing: pending (`crates/revenant-core`).
-8. Kiro powers: pending.
+## 1. Kiro IDE, CLI, Web or Crew: which, and how they differed
+
+**Kiro CLI 3.2.0 only.** The whole project was built in one long CLI session. I did not use the IDE, Kiro Web or Kiro Crew, so I have no comparison between them to offer.
+
+What the CLI made possible here: running the real product from the agent's own shell (the server, the browser tests, the container), so claims could be checked the moment they were made. Two examples are in the log: the rate-limit bypass was reproduced with a `curl` loop before the fix and again after, and the demo video's terminal scenes show real command output captured from the repository.
+
+## 2. Custom agents
+
+Two, in `.kiro/agents/`. Both pass `kiro-cli agent validate --path` and appear as `Workspace` agents in `kiro-cli agent list`.
+
+- **`revenant-reviewer`** (read-only: `read`, `grep`, `glob`, `thinking` are auto-approved; no write tool is trusted). I ran it for real: `kiro-cli chat --agent revenant-reviewer --no-interactive --trust-tools=fs_read,grep,glob,read "<review brief>"`. It read the live-mode and preview code and returned six findings with file, line, reproduction and fix. Every finding was checked before acting:
+  - One was reproduced on a running server: `http://0x7f.0x1/` was accepted by the live endpoint, which contradicted the README's claim that IP addresses are rejected. Fixed, with tests, and re-checked on a server afterwards (six spellings of an IP address now return `bad_url`).
+  - Two more were fixed: the preview's sandboxing header could silently disappear on a bad config value (now the server refuses to start, and serving fails closed), and internal error text reached clients (now fixed messages, details in the log).
+  - Three were real design issues I did not fix before submitting: no per-client quotas for job storage or live-run slots, and IPv6 clients can use many addresses against a per-address limit. They are in the README under Limitations and in the spec as S4.
+- **`revenant-rust`** (engine work, with the steering and both specs pinned as resources). I wrote it but **did not run it**. The code in this repository was written in the main session, not through this agent, so I cannot report an effect on the build.
+
+Before the agent existed, the same kind of read-through by me found one other bug (the rate limit trusted a header the client writes). That one is in the log too.
+
+## 3. Agent hooks
+
+Five, in `.kiro/hooks/`: engine tests on save for `crates/revenant-core`; fixture and pipeline tests when anything under `fixtures/` changes; quick checks (`scripts/verify.sh --quick`) when the agent stops; a spec-first reminder on every prompt; and a PreToolUse guard (`.kiro/hooks/scripts/block-secrets.sh`) that blocks `git commit` and `git push` when the staged diff contains a credential.
+
+The honest state: **the hooks were registered late in the session and take effect from the next session start, so I did not see any of them fire during this build.** What I did verify is the guard script itself, by hand, against three inputs: a clean commit passes, an unrelated command passes, and a staged fake `cfat_` token exits 2 with the offending line (the output is in the demo video). It exists because a real Devpost token was pasted into this project's chat early on. I cannot claim the hooks improved the process; I can claim they are tested and ready.
+
+## 4. Spec-driven development
+
+Three specs in `.kiro/specs/`: `revenant-core-engine` (R groups), `resurrection-api` (A, L and S groups) and `web-ritual` (W). Requirements are in EARS form. Every test name or comment maps to a requirement id (for example R5.10 for "a failed lookup is UNKNOWN, never MISSING").
+
+How it differed from vibe coding, from what I saw: the spec was where real data was allowed to disagree with the plan. Each change was written into the requirements first, then the code:
+
+- R2.3 `UNCERTAIN`: the first y2k.gov probe found a page that changed between two captures. The plan's four verdicts could not express it.
+- R0: five images I had called anachronisms were archived only as HTTP 404 pages. The spike was wrong, the doc was corrected, and only 200 captures count now.
+- R4: two archive digests differed while the bytes were identical, so content hashes are compared first.
+- A1.6 and A1.7: the rate-limit bypass and the memory budget.
+- S1 to S4: the reviewer's findings.
+
+I did not run a controlled comparison against vibe coding, so I will not claim a speed-up. The claim I can support is narrower: the requirements file is a readable record of every place the design was wrong.
+
+## 5. Steering
+
+Five always-on files in `.kiro/steering/`: `product.md`, `tech.md`, `structure.md`, `security.md`, `testing.md`. They were injected into the session on every turn. The ones that shaped behavior most:
+
+- `product.md`: "never present a seeded result as live", "a failed lookup is UNKNOWN, never MISSING", "mark an anachronism, never hide it". These became requirements and then tests.
+- `security.md`: archive politeness (serial requests, backoff, 403 and 429 are not "missing"), SSRF rules, and, after the review, how to read the client address behind a proxy.
+- `testing.md`: the list of required property tests.
+
+## 6. MCP
+
+- **Devpost MCP** (`https://devpost.com/mcp`), configured at user level in `~/.kiro/settings/mcp.json` so no credential is in this repository (it uses OAuth). Used read-only: the hackathon's rules, prizes and judging criteria; the exact submission form fields; the account's registration status. That is how the Devpost text in `docs/submission/` was matched to the real form. A pasted API token turned out not to work for tool calls, which is what sent me to the OAuth flow.
+- **A Revenant MCP server was not built.** It is in the roadmap.
+
+## 7. Property-based testing
+
+Eleven property tests (`crates/revenant-core/tests/properties.rs`, `package_props.rs`, `rewrite_props.rs`) cover: classification does not depend on input order; `ANACHRONISM` is never returned when an earlier capture exists; a `PROVEN` verdict's digest matches a later capture; delta equals capture minus target; the timestamp parser never panics; ZIP path sanitization accepts only safe paths and rejects traversal wherever it appears; ZIP bytes do not depend on entry order; the HTML rewriter never panics on arbitrary bytes; no archive host survives in a URL attribute however the archive URL is written; scripts and inline handlers never survive.
+
+The honest result: **property tests did not catch a bug in this repository that unit tests had missed.** They pinned invariants that I had reasoned out first. One property assertion I wrote was wrong (it forbade the string `/web/` anywhere, which a legitimate path could contain) and I removed it after noticing that before it failed.
+
+## 8. Kiro powers
+
+**None used.** No powers were installed in this environment. Third-party tooling that did matter: Playwright (driving a real browser to review the UI and to record the demo video), ffmpeg, Docker, and the GitHub CLI.
 
 ## Evidence log (dated)
 

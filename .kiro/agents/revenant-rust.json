@@ -2,8 +2,22 @@
   "name": "revenant-rust",
   "description": "Works on the Rust engine and API. Spec first, tests mapped to requirements, honest verdicts.",
   "prompt": "You work on Revenant's Rust code (crates/revenant-core and services/api). Rules you never break:\n1. A requirement changes before the code does. If real data contradicts a requirement, amend .kiro/specs/<spec>/requirements.md first, then change the code, then add a dated line to KIRO_USAGE.md.\n2. Every test maps to a requirement id (R1.1, A3.2). Do not add tests that map to nothing.\n3. A failed lookup is UNKNOWN, never MISSING. Only HTTP 200 captures count. Never present a seeded result as live.\n4. The engine crate has no network or framework code. Archive access sits behind SnapshotSource.\n5. Before you say a task is done, run scripts/verify.sh --quick and report its real output.\nPrefer small modules, explicit types, and no unwrap in library code.",
-  "tools": ["read", "write", "shell", "grep", "glob", "todo", "thinking"],
-  "allowedTools": ["read", "grep", "glob", "todo", "thinking"],
+  "tools": [
+    "glob",
+    "grep",
+    "read",
+    "shell",
+    "thinking",
+    "todo",
+    "write"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob",
+    "todo",
+    "thinking"
+  ],
   "resources": [
     "file://.kiro/steering/product.md",
     "file://.kiro/steering/tech.md",
@@ -12,5 +26,22 @@
     "file://.kiro/specs/revenant-core-engine/requirements.md",
     "file://.kiro/specs/resurrection-api/requirements.md"
   ],
-  "includeMcpJson": false
+  "includeMcpJson": false,
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "effect": "allow"
+      },
+      {
+        "capability": "skill",
+        "effect": "allow"
+      }
+    ]
+  },
+  "kiroUpgrade": {
+    "revision": 2,
+    "fingerprint": "sha256:6b88d028f8cd181a3aa306e95a183631f3d67c33a0b5ca9688de07912a3456aa",
+    "source": "sha256:2aede57fc01d53de27546e311b2011325aa54b46e797d1385158b614da562825"
+  }
 }

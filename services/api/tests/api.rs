@@ -81,7 +81,11 @@ async fn examples_list_the_seeded_fixture_with_its_rights_basis() {
     let ex = &v["examples"][0];
     assert_eq!(ex["id"], "y2k-briefings");
     assert_eq!(ex["default_date"], "2000-03-02");
-    assert!(ex["rights"].as_str().unwrap().contains("public domain"));
+    let rights = ex["rights"].as_str().unwrap();
+    assert!(rights.contains("federal"), "{rights}");
+    // The line must carry the caveat, not claim certainty (rights review, Nov 11 2026).
+    assert!(rights.contains("not confirmed"), "{rights}");
+    assert!(!rights.contains("public domain"), "{rights}");
     assert!(
         ex.get("dir").is_none(),
         "internal directory names stay private"
@@ -471,4 +475,20 @@ async fn retained_jobs_stay_within_the_byte_budget() {
     let (oldest, _, _) = call(&a, get(&format!("/api/resurrections/{}", ids[0]))).await;
     assert_eq!(newest, StatusCode::OK);
     assert_eq!(oldest, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_bad_frame_ancestors_value_stops_the_server_from_starting() {
+    for bad in ["x\ny", "a; sandbox", "bad\u{7f}"] {
+        let result = App::new(Config {
+            frame_ancestors: bad.to_string(),
+            ..config()
+        });
+        assert!(result.is_err(), "{bad:?} was accepted");
+    }
+    assert!(App::new(Config {
+        frame_ancestors: "'self' https://app.example.org".to_string(),
+        ..config()
+    })
+    .is_ok());
 }

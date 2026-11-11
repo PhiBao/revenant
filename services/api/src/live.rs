@@ -141,10 +141,11 @@ fn validate_host(host: &str) -> Result<(), UrlError> {
             return Err(UrlError("That is not a valid site name."));
         }
     }
-    // An all-numeric last label is an IP address, never a real top-level domain.
+    // No real top-level domain starts with a digit. This rejects IPv4 in every spelling
+    // (1.2.3.4, 127.1, 0x7f.0x1, 0177.0.0.1) without having to parse each of them (S2).
     if labels
         .last()
-        .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
+        .is_some_and(|l| l.bytes().next().is_some_and(|b| b.is_ascii_digit()))
     {
         return Err(UrlError(
             "IP addresses are not supported. Use the site's name.",
@@ -517,6 +518,8 @@ mod tests {
         assert_eq!(ok("example.org/about.html").site, "example.org");
         assert_eq!(ok("http://example.org:80/a/b.html").page, "a/b.html");
         assert_eq!(ok("http://example.org./x.html").site, "example.org");
+        // Real top-level domains that contain digits later are fine.
+        assert_eq!(ok("http://example.xn--p1ai/").site, "example.xn--p1ai");
     }
 
     #[test]
@@ -542,6 +545,12 @@ mod tests {
             "http://192.168.0.1/admin",
             "http://[::1]/",
             "http://0x7f.1/",
+            "http://0x7f.0x1/",
+            "http://0177.0.0.1/",
+            "http://127.1/",
+            "http://017700000001/",
+            "http://1.2.3.4/",
+            "http://example.1com/",
             "http://example.org:abc/",
             "http://-bad.example.org/",
             "http://exa mple.org/",

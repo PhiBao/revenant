@@ -18,6 +18,14 @@ Open item before any video or public use: confirm that no page in the fixture em
 ## Reproducing
 The query and filter are in `captures.tsv`'s source rows. Re-run the CDX query above with `url=y2k.gov/` and `url=y2k.gov/gif/<name>.gif`. Expect the counts to grow over time as the archive adds captures, so the test pins this snapshot's timestamps rather than the counts.
 
+## Rights review of the briefings fixture (Nov 11, 2026)
+
+Checked: the stored HTML has no copyright notice, credit line, or mention of photographs or permission. Its only external links go to `www.consumer.gov` and an IP address. The images are one illustrated logo (an Earth over the letters Y2K) and five navigation buttons that are plain text on a shape.
+
+Not established: who made the logo. Works by federal employees are not under copyright, but a federal site can use graphics made by contractors, and the file does not say. The buttons are site UI and low risk.
+
+Status: **likely free to use, not proven.** If a rights holder objects, the logo can be removed from the fixture and the specimen still works (its image would show as missing). The submitter should decide whether that risk is acceptable.
+
 ## briefings fixture
 Captured 2026-11-11 from the CDX API: labels are the page and its 11 local references. Source rows keep all statuses. Only the 200 rows are used by the engine.
 No blob bodies are stored yet, so the ZIP packaging step will need them.
