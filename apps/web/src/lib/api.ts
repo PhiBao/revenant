@@ -128,6 +128,37 @@ export async function createJob(
   return (await res.json()) as Job;
 }
 
+export type LiveState =
+  | { status: "running"; stage: string; requests: number; notes: string[] }
+  | { status: "failed"; error: { code: string; message: string }; notes: string[] }
+  | { status: "done"; strict: Job; nearest: Job; notes: string[] };
+
+export async function createLive(url: string, date: string, rights: boolean): Promise<{ id: string }> {
+  let res: Response;
+  try {
+    res = await fetch("/api/live", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url, date, rights }),
+    });
+  } catch {
+    throw { kind: "network" } satisfies Failure;
+  }
+  if (!res.ok) throw await parseFailure(res);
+  return (await res.json()) as { id: string };
+}
+
+export async function getLive(id: string): Promise<LiveState> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/live/${id}`);
+  } catch {
+    throw { kind: "network" } satisfies Failure;
+  }
+  if (!res.ok) throw await parseFailure(res);
+  return (await res.json()) as LiveState;
+}
+
 /** `20000301091452` becomes `2000-03-01 09:14 UTC`. */
 export function formatCapture(cdx: string | null): string {
   if (!cdx || cdx.length !== 14) return "—";

@@ -26,6 +26,49 @@ export function DeathCertificate({ failure, example, date, onPickDate, onRetry, 
     );
   }
 
+  if (failure.code === "busy") {
+    return (
+      <article className="paper paper-dead" role="alert">
+        <p className="paper-kicker">The slab is full</p>
+        <h3 className="paper-title">Other live restores are running.</h3>
+        <p>
+          Revenant asks the archive one question at a time to stay polite, so only a few live
+          restores run together. Try again in a minute, or use the stored specimen.
+        </p>
+        <div className="downloads">
+          <button type="button" className="btn" onClick={onRetry}>
+            Try again
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onReset}>
+            Back to the slab
+          </button>
+        </div>
+      </article>
+    );
+  }
+
+  if (failure.code === "archive_unavailable") {
+    return (
+      <article className="paper paper-dead" role="alert">
+        <p className="paper-kicker">The archive did not answer</p>
+        <h3 className="paper-title">This is not the same as nothing being there.</h3>
+        <p>{failure.message}</p>
+        <p className="fine">
+          Revenant will not call a page lost because the archive was slow or refused a request. Try
+          again in a minute.
+        </p>
+        <div className="downloads">
+          <button type="button" className="btn" onClick={onRetry}>
+            Try again
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onReset}>
+            Back to the slab
+          </button>
+        </div>
+      </article>
+    );
+  }
+
   if (failure.code === "rate_limited") {
     return (
       <article className="paper paper-dead" role="alert">

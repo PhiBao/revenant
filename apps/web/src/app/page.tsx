@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createJob,
+  createLive,
+  getLive,
   listExamples,
   type Certificate as Cert,
   type Example,
@@ -18,17 +20,25 @@ import { Mark } from "@/components/Mark";
 import { Vitals } from "@/components/Vitals";
 
 const REPO = "https://github.com/PhiBao/revenant";
+const SAMPLE_LIVE = { url: "http://www.y2k.gov/briefings.html", date: "2000-03-02" };
 
 type Phase = "idle" | "loading" | "autopsy" | "failed";
+type Source = "specimen" | "live";
 
 /** The one-sentence finding shown above the ledger. Built only from the certificate. */
 function finding(cert: Cert, date: string): string {
   const total = cert.files.length;
   const survive = cert.files.filter((f) => f.verdict !== "MISSING" && f.verdict !== "UNKNOWN").length;
   const later = cert.files.filter((f) => f.verdict === "ANACHRONISM").length;
+  const unknown = cert.files.filter((f) => f.verdict === "UNKNOWN").length;
   const parts = [`${survive} of the ${total} files this page uses survive in the archive.`];
   if (later > 0) {
     parts.push(`${later} of them were first captured after ${date}, so they may not match the page as it was that day.`);
+  }
+  if (unknown > 0) {
+    parts.push(
+      `The archive did not answer for ${unknown} ${unknown === 1 ? "file" : "files"}, so ${unknown === 1 ? "it is" : "they are"} left out of the score instead of counted as lost.`,
+    );
   }
   const first = cert.files[0];
   if (first?.verdict === "UNCERTAIN") {
@@ -44,23 +54,36 @@ function scrollToRef(el: HTMLElement | null) {
   el.focus({ preventScroll: true });
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export default function Home() {
   const [examples, setExamples] = useState<Example[] | null>(null);
   const [loadFailure, setLoadFailure] = useState<Failure | null>(null);
+  const [source, setSource] = useState<Source>("specimen");
   const [exampleId, setExampleId] = useState("");
   const [date, setDate] = useState("");
+  const [liveUrl, setLiveUrl] = useState("");
+  const [liveDate, setLiveDate] = useState("");
+  const [rights, setRights] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState({ strict: false, nearest: false });
+  const [liveStage, setLiveStage] = useState("");
+  const [liveRequests, setLiveRequests] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
   const [strict, setStrict] = useState<Job | null>(null);
   const [nearest, setNearest] = useState<Job | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [revealed, setRevealed] = useState(false);
 
   const autopsyRef = useRef<HTMLHeadingElement>(null);
   const revealRef = useRef<HTMLHeadingElement>(null);
   const failRef = useRef<HTMLDivElement>(null);
+  /** Bumped to cancel a running poll when the visitor starts over. */
+  const pollToken = useRef(0);
 
   const example = examples?.find((e) => e.id === exampleId) ?? null;
+  const live = source === "live";
 
   const fetchExamples = useCallback(() => {
     listExamples()
@@ -84,18 +107,29 @@ export default function Home() {
     fetchExamples();
   };
 
-  const begin = useCallback(
-    async (chosenDate?: string) => {
-      if (!example) return;
-      const day = chosenDate ?? date;
-      setDate(day);
-      setPhase("loading");
-      setFailure(null);
-      setRevealed(false);
-      setStrict(null);
-      setNearest(null);
-      setProgress({ strict: false, nearest: false });
+  // Seconds since a live run began, shown so a long wait never looks like a hang.
+  useEffect(() => {
+    if (phase !== "loading" || !live) return;
+    const started = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [phase, live]);
 
+  const succeed = useCallback((s: Job, n: Job, runNotes: string[] = []) => {
+    setStrict(s);
+    setNearest(n);
+    setNotes(runNotes);
+    setPhase("autopsy");
+  }, []);
+
+  const fail = useCallback((f: Failure) => {
+    setFailure(f);
+    setPhase("failed");
+  }, []);
+
+  const beginSpecimen = useCallback(
+    async (day: string) => {
+      if (!example) return;
       const strictP = createJob(example.id, day, "strict").then((j) => {
         setProgress((p) => ({ ...p, strict: true }));
         return j;
@@ -105,18 +139,76 @@ export default function Home() {
         return j;
       });
       const [s, n] = await Promise.allSettled([strictP, nearestP]);
-
-      if (s.status === "fulfilled" && n.status === "fulfilled") {
-        setStrict(s.value);
-        setNearest(n.value);
-        setPhase("autopsy");
-        return;
-      }
+      if (s.status === "fulfilled" && n.status === "fulfilled") return succeed(s.value, n.value);
       const reason = s.status === "rejected" ? s.reason : n.status === "rejected" ? n.reason : null;
-      setFailure((reason as Failure) ?? { kind: "network" });
-      setPhase("failed");
+      fail((reason as Failure) ?? { kind: "network" });
     },
-    [example, date],
+    [example, succeed, fail],
+  );
+
+  const beginLive = useCallback(
+    async (url: string, day: string) => {
+      const token = ++pollToken.current;
+      setLiveStage("Starting");
+      setLiveRequests(0);
+      setElapsed(0);
+      try {
+        const { id } = await createLive(url, day, rights);
+        let misses = 0;
+        while (pollToken.current === token) {
+          let state;
+          try {
+            state = await getLive(id);
+            misses = 0;
+          } catch (e) {
+            // One dropped poll is not a failed run. Give up after three in a row.
+            if ((e as Failure).kind === "network" && ++misses < 3) {
+              await sleep(1500);
+              continue;
+            }
+            throw e;
+          }
+          if (pollToken.current !== token) return;
+          if (state.status === "running") {
+            setLiveStage(state.stage);
+            setLiveRequests(state.requests);
+            await sleep(1500);
+            continue;
+          }
+          if (state.status === "failed") {
+            return fail({
+              kind: "api",
+              status: 422,
+              code: state.error.code,
+              message: state.error.message,
+              verdict: state.error.code === "no_capture" ? "no usable capture" : undefined,
+            });
+          }
+          return succeed(state.strict, state.nearest, state.notes);
+        }
+      } catch (e) {
+        if (pollToken.current === token) fail(e as Failure);
+      }
+    },
+    [rights, succeed, fail],
+  );
+
+  const begin = useCallback(
+    async (chosenDate?: string) => {
+      const day = chosenDate ?? (live ? liveDate : date);
+      if (live) setLiveDate(day);
+      else setDate(day);
+      setPhase("loading");
+      setFailure(null);
+      setRevealed(false);
+      setStrict(null);
+      setNearest(null);
+      setNotes([]);
+      setProgress({ strict: false, nearest: false });
+      if (live) await beginLive(liveUrl, day);
+      else await beginSpecimen(day);
+    },
+    [live, liveDate, date, liveUrl, beginLive, beginSpecimen],
   );
 
   useEffect(() => {
@@ -129,6 +221,7 @@ export default function Home() {
   }, [revealed]);
 
   const reset = () => {
+    pollToken.current++;
     setPhase("idle");
     setStrict(null);
     setNearest(null);
@@ -140,6 +233,7 @@ export default function Home() {
   const busy = phase === "loading";
   const later =
     nearest?.certificate.files.filter((f) => f.included && f.verdict === "ANACHRONISM").length ?? 0;
+  const resultIsLive = strict?.mode === "LIVE";
 
   return (
     <main className="page">
@@ -197,44 +291,140 @@ export default function Home() {
               void begin();
             }}
           >
-            <div className="specimen">
-              <p className="specimen-no">Specimen</p>
-              <h3 className="specimen-title">{example.title}</h3>
-              <p className="specimen-blurb">{example.blurb}</p>
-              <p className="specimen-rights">
-                <span>Rights</span> {example.rights}
-              </p>
-            </div>
-
-            <div className="field">
-              <label htmlFor="date">Restore it as it was on</label>
-              <input
-                id="date"
-                type="date"
-                value={date}
-                min="1996-01-01"
-                max="2001-12-31"
-                onChange={(e) => setDate(e.target.value)}
-                required
+            <div className="seg" role="group" aria-label="What to restore">
+              <button
+                type="button"
+                aria-pressed={!live}
                 disabled={busy}
-              />
-              <div className="chips" role="group" aria-label="Suggested dates">
-                {[{ date: example.default_date, label: "Default" }, ...example.alternate_dates].map((a) => (
-                  <button
-                    key={a.date}
-                    type="button"
-                    className="chip"
-                    aria-pressed={date === a.date}
-                    disabled={busy}
-                    onClick={() => setDate(a.date)}
-                  >
-                    {a.date} · {a.label}
-                  </button>
-                ))}
-              </div>
+                onClick={() => setSource("specimen")}
+              >
+                A stored specimen
+                <span>Instant. Labelled SEEDED.</span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={live}
+                disabled={busy}
+                onClick={() => setSource("live")}
+              >
+                A page of your own
+                <span>Asks the archive live. About a minute.</span>
+              </button>
             </div>
 
-            {busy ? (
+            {!live ? (
+              <>
+                <div className="specimen">
+                  <p className="specimen-no">Specimen</p>
+                  <h3 className="specimen-title">{example.title}</h3>
+                  <p className="specimen-blurb">{example.blurb}</p>
+                  <p className="specimen-rights">
+                    <span>Rights</span> {example.rights}
+                  </p>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="date">Restore it as it was on</label>
+                  <input
+                    id="date"
+                    type="date"
+                    value={date}
+                    min="1996-01-01"
+                    max="2001-12-31"
+                    onChange={(e) => setDate(e.target.value)}
+                    required
+                    disabled={busy}
+                  />
+                  <div className="chips" role="group" aria-label="Suggested dates">
+                    {[{ date: example.default_date, label: "Default" }, ...example.alternate_dates].map((a) => (
+                      <button
+                        key={a.date}
+                        type="button"
+                        className="chip"
+                        aria-pressed={date === a.date}
+                        disabled={busy}
+                        onClick={() => setDate(a.date)}
+                      >
+                        {a.date} · {a.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="field">
+                  <label htmlFor="url">Address of the dead page</label>
+                  <input
+                    id="url"
+                    className="text-input"
+                    type="text"
+                    inputMode="url"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="http://www.example.org/about.html"
+                    value={liveUrl}
+                    onChange={(e) => setLiveUrl(e.target.value)}
+                    required
+                    disabled={busy}
+                  />
+                  <p className="fine">
+                    One page at a time. Revenant never visits this address. It only asks the archive
+                    what it holds.
+                  </p>
+                  <div className="chips" role="group" aria-label="Try a known page">
+                    <button
+                      type="button"
+                      className="chip"
+                      disabled={busy}
+                      onClick={() => {
+                        setLiveUrl(SAMPLE_LIVE.url);
+                        setLiveDate(SAMPLE_LIVE.date);
+                      }}
+                    >
+                      Try the Y2K.gov page, live
+                    </button>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="live-date">Restore it as it was on</label>
+                  <input
+                    id="live-date"
+                    type="date"
+                    value={liveDate}
+                    min="1996-01-01"
+                    onChange={(e) => setLiveDate(e.target.value)}
+                    required
+                    disabled={busy}
+                  />
+                </div>
+
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={rights}
+                    onChange={(e) => setRights(e.target.checked)}
+                    required
+                    disabled={busy}
+                  />
+                  <span>
+                    This site is mine, or I have the right to restore it. What the archive holds
+                    stays the property of its owners.
+                  </span>
+                </label>
+              </>
+            )}
+
+            {busy && live ? (
+              <div className="live-progress" aria-live="polite">
+                <p className="live-stage">{liveStage}</p>
+                <p className="fine">
+                  {liveRequests} {liveRequests === 1 ? "question" : "questions"} asked · {elapsed}s ·
+                  one at a time, on purpose, so the archive stays polite
+                </p>
+              </div>
+            ) : busy ? (
               <ol className="progress" aria-live="polite">
                 <li className={progress.strict ? "done" : ""}>
                   Reading the archive and classifying every file
@@ -254,8 +444,8 @@ export default function Home() {
         <section className="act" ref={failRef} tabIndex={-1}>
           <DeathCertificate
             failure={failure}
-            example={example}
-            date={date}
+            example={live ? null : example}
+            date={live ? liveDate : date}
             onPickDate={(d) => void begin(d)}
             onRetry={() => void begin()}
             onReset={reset}
@@ -279,6 +469,11 @@ export default function Home() {
             as of <strong>{strict.date}</strong>
             <span className="stamp stamp-inline">{strict.mode}</span>
           </p>
+          {notes.map((n) => (
+            <p key={n} className="fine">
+              {n}
+            </p>
+          ))}
           <Vitals cert={strict.certificate} />
           <p className="finding">{finding(strict.certificate, strict.date)}</p>
           <Ledger cert={strict.certificate} />
@@ -337,18 +532,31 @@ export default function Home() {
       <footer className="colophon">
         <h2>What is real here</h2>
         <ul>
-          <li>
-            Files come from stored copies of public web-archive data, so this run is labelled{" "}
-            <strong>SEEDED</strong>. Nothing is simulated: the dates, hashes and bytes are the
-            archive&rsquo;s.
-          </li>
+          {resultIsLive ? (
+            <li>
+              This run asked the Internet Archive live, so it is labelled <strong>LIVE</strong>. The
+              dates, hashes and bytes are the archive&rsquo;s, fetched one request at a time.
+            </li>
+          ) : (
+            <li>
+              The stored specimen comes from saved copies of public web-archive data, so its runs are
+              labelled <strong>SEEDED</strong>. Nothing is simulated: the dates, hashes and bytes are
+              the archive&rsquo;s. &ldquo;A page of your own&rdquo; asks the archive live and is
+              labelled <strong>LIVE</strong>.
+            </li>
+          )}
           <li>
             Revenant never calls a missing file a recovered one. A page captured only as an error
-            page counts as missing.
+            page counts as missing. A file the archive would not answer for is shown as unknown and
+            kept out of the score.
           </li>
           <li>
-            The specimen is a US federal government work and in the public domain. Its provenance
-            is in the repository.
+            Pages are restored one at a time, without scripts. Links to other pages are flagged, not
+            followed. Restored files are held for an hour.
+          </li>
+          <li>
+            The stored specimen is a US federal government work and in the public domain. Its
+            provenance is in the repository.
           </li>
         </ul>
         <p className="fine">
