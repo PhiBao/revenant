@@ -10,6 +10,7 @@ fn capture_strategy() -> impl Strategy<Value = Capture> {
     (0i64..10_000, "[abc]{1,2}").prop_map(|(ts, digest)| Capture {
         ts: ts * 86_400,
         digest,
+        content: None,
     })
 }
 

@@ -29,5 +29,11 @@ Second amendment (Nov 11, 2026). Five y2k GIFs had captures only with HTTP 404. 
 - R0.1 WHEN an index row has a status other than 200 THEN the system SHALL NOT treat it as a capture. It SHALL count the row as dropped.
 - R0.2 A file with no 200 captures SHALL classify as `MISSING`, and the ledger SHALL say "archived only as 404" when rows were dropped.
 
+Third amendment (Nov 11, 2026). Two y2k captures with different CDX digests served byte-identical bodies, so a digest difference alone can raise a false `UNCERTAIN`.
+
+- R4.1 WHEN both captures on either side of T carry a content hash THEN the system SHALL compare content hashes and ignore the CDX digests.
+- R4.2 WHEN either side has no content hash THEN the system SHALL compare CDX digests.
+- R4.3 WHEN content hashes are equal and digests differ THEN the verdict SHALL be `PROVEN`.
+
 ## Out of scope for this spec
 Network access, de-archiving, packaging, and the HTTP API. Those belong to later specs.

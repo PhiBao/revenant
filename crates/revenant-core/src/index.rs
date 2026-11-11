@@ -66,6 +66,7 @@ pub fn parse_index(tsv: &str) -> Result<CaptureIndex, IndexError> {
             .push(Capture {
                 ts,
                 digest: digest.to_string(),
+                content: None,
             });
     }
     Ok(index)

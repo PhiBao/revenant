@@ -9,6 +9,19 @@ pub struct Capture {
     pub ts: i64,
     /// Content digest from the archive index.
     pub digest: String,
+    /// SHA-256 of the served bytes, when they have been fetched.
+    pub content: Option<String>,
+}
+
+impl Capture {
+    /// True when both captures hold the same content. Compares content hashes when both
+    /// are known, and the archive's digests otherwise (R4).
+    pub fn same_content(&self, other: &Capture) -> bool {
+        match (&self.content, &other.content) {
+            (Some(a), Some(b)) => a == b,
+            _ => self.digest == other.digest,
+        }
+    }
 }
 
 /// How much a file's chosen capture can be trusted as the version at the target time.
@@ -48,7 +61,7 @@ pub fn classify(target: i64, captures: &[Capture]) -> Selection {
     let after = sorted.iter().find(|c| c.ts > target).copied();
 
     match (before, after) {
-        (Some(b), Some(a)) if a.digest == b.digest => select(Verdict::Proven, b, target),
+        (Some(b), Some(a)) if a.same_content(b) => select(Verdict::Proven, b, target),
         (Some(b), None) => select(Verdict::Likely, b, target),
         (Some(b), Some(_)) => select(Verdict::Uncertain, b, target),
         (None, Some(a)) => select(Verdict::Anachronism, a, target),
@@ -77,6 +90,7 @@ mod tests {
         Capture {
             ts: parse_cdx_timestamp(cdx_ts).expect("valid CDX timestamp"),
             digest: digest.to_string(),
+            content: None,
         }
     }
 
@@ -128,6 +142,24 @@ mod tests {
     fn delta_is_negative_before_target() {
         let s = classify(target(), &[cap("19991013021843", "X")]);
         assert!(s.delta_secs.expect("delta") < 0);
+    }
+
+    #[test]
+    fn equal_content_overrides_different_digests() {
+        let mut a = cap("19991013021843", "D1");
+        let mut b = cap("20000302030040", "D2");
+        a.content = Some("same".into());
+        b.content = Some("same".into());
+        assert_eq!(classify(target(), &[a, b]).verdict, Verdict::Proven);
+    }
+
+    #[test]
+    fn different_content_overrides_equal_digests() {
+        let mut a = cap("19991013021843", "D");
+        let mut b = cap("20000302030040", "D");
+        a.content = Some("one".into());
+        b.content = Some("two".into());
+        assert_eq!(classify(target(), &[a, b]).verdict, Verdict::Uncertain);
     }
 
     #[test]
