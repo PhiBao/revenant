@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use revenant_core::fidelity::{Capture, Verdict};
 use revenant_core::pipeline::{
-    resurrect, Lookup, Mode, PipelineError, Request, SeededSource, SnapshotSource, SourceError,
-    CERTIFICATE_PATH,
+    resurrect, resurrect_with, Limits, Lookup, Mode, PipelineError, Request, SeededSource,
+    SnapshotSource, SourceError, CERTIFICATE_PATH,
 };
 use revenant_core::time::parse_cdx_timestamp;
 
@@ -324,4 +324,36 @@ fn the_certificate_is_inside_the_zip() {
     let json = serde_json::to_string_pretty(&r.certificate).unwrap();
     let needle = json.as_bytes();
     assert!(r.zip.windows(needle.len()).any(|w| w == needle));
+}
+
+#[test]
+fn a_caller_can_lower_the_caps() {
+    let imgs: String = (0..11)
+        .map(|i| format!(r#"<img src="i{i}.gif">"#))
+        .collect();
+    let m = mock_with_page(&imgs);
+    assert_eq!(
+        resurrect_with(&m, &mock_request(), Limits::new(10, 1024)),
+        Err(PipelineError::TooManyAssets { found: 11, cap: 10 })
+    );
+}
+
+#[test]
+fn a_caller_cannot_raise_the_caps() {
+    assert_eq!(Limits::new(10_000, usize::MAX), Limits::default());
+    let imgs: String = (0..501)
+        .map(|i| format!(r#"<img src="i{i}.gif">"#))
+        .collect();
+    let m = mock_with_page(&imgs);
+    let raised = Limits {
+        max_assets: 10_000,
+        max_bytes: usize::MAX,
+    };
+    assert_eq!(
+        resurrect_with(&m, &mock_request(), raised),
+        Err(PipelineError::TooManyAssets {
+            found: 501,
+            cap: 500
+        })
+    );
 }

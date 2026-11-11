@@ -49,3 +49,5 @@ Network access, de-archiving, packaging, and the HTTP API. Those belong to later
 - R5.10 WHEN the archive cannot be asked about a file (error, block, timeout) THEN its verdict SHALL be `UNKNOWN`, it SHALL stay out of the ZIP, and it SHALL NOT count as missing in Completeness.
 - R5.8 The system SHALL refuse a job above 500 assets or 64 MiB, and SHALL say which cap it hit.
 - R5.9 Navigation links are not restored in single-page scope. The certificate SHALL list them as `links_not_restored`.
+
+- R5.11 The caller MAY lower the asset and byte caps for one request (`Limits`). A request SHALL NOT be able to raise them above 500 assets and 64 MiB.

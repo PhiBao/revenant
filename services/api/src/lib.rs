@@ -5,6 +5,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,10 +18,13 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use revenant_core::pipeline::{
-    resurrect, PipelineError, Request as PipelineRequest, Resurrection, SeededSource,
+    resurrect, resurrect_with, Limits, PipelineError, Request as PipelineRequest, Resurrection,
+    SeededSource,
 };
 use revenant_core::time::parse_cdx_timestamp;
 use serde::{Deserialize, Serialize};
+
+pub mod live;
 use serde_json::{json, Value};
 
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
@@ -37,6 +41,13 @@ pub struct Config {
     /// Read the client address from `X-Forwarded-For`. Only enable behind a trusted proxy.
     pub trust_proxy: bool,
     pub frame_ancestors: String,
+    /// The one archive host live mode may contact (L1.2).
+    pub archive_base: String,
+    /// Minimum gap between archive requests (L3.1).
+    pub archive_gap: Duration,
+    pub live_max_concurrent: usize,
+    pub live_rate_limit: u32,
+    pub live_rate_window: Duration,
 }
 
 impl Default for Config {
@@ -50,6 +61,11 @@ impl Default for Config {
             rate_window: Duration::from_secs(60),
             trust_proxy: false,
             frame_ancestors: "'self'".to_string(),
+            archive_base: "https://web.archive.org".to_string(),
+            archive_gap: Duration::from_millis(1200),
+            live_max_concurrent: 2,
+            live_rate_limit: 6,
+            live_rate_window: Duration::from_secs(600),
         }
     }
 }
@@ -94,11 +110,34 @@ struct Store {
     order: VecDeque<String>,
 }
 
+enum RunState {
+    Running,
+    Done { strict: String, nearest: String },
+    Failed { code: &'static str, message: String },
+}
+
+struct Run {
+    created: Instant,
+    progress: Arc<Mutex<live::Progress>>,
+    state: Mutex<RunState>,
+    notes: Vec<String>,
+}
+
+#[derive(Default)]
+struct RunStore {
+    map: HashMap<String, Arc<Run>>,
+    order: VecDeque<String>,
+}
+
 pub struct App {
     cfg: Config,
     examples: Vec<Example>,
     jobs: Mutex<Store>,
     hits: Mutex<HashMap<String, (Instant, u32)>>,
+    live_hits: Mutex<HashMap<String, (Instant, u32)>>,
+    runs: Mutex<RunStore>,
+    live_active: AtomicUsize,
+    archive: Arc<live::ArchiveClient>,
 }
 
 #[derive(Clone)]
@@ -121,11 +160,16 @@ impl App {
                 source: Arc::new(source),
             });
         }
+        let archive = live::ArchiveClient::new(&cfg.archive_base, cfg.archive_gap)?;
         Ok(Arc::new(Self {
             cfg,
             examples,
             jobs: Mutex::new(Store::default()),
             hits: Mutex::new(HashMap::new()),
+            live_hits: Mutex::new(HashMap::new()),
+            runs: Mutex::new(RunStore::default()),
+            live_active: AtomicUsize::new(0),
+            archive: Arc::new(archive),
         }))
     }
 
@@ -172,25 +216,72 @@ impl App {
 
     /// Returns the seconds to wait when the client is over its limit.
     fn rate_check(&self, key: &str) -> Option<u64> {
-        let mut hits = self.hits.lock().expect("rate lock");
+        Self::window_check(&self.hits, key, self.cfg.rate_limit, self.cfg.rate_window)
+    }
+
+    fn live_rate_check(&self, key: &str) -> Option<u64> {
+        Self::window_check(
+            &self.live_hits,
+            key,
+            self.cfg.live_rate_limit,
+            self.cfg.live_rate_window,
+        )
+    }
+
+    fn window_check(
+        table: &Mutex<HashMap<String, (Instant, u32)>>,
+        key: &str,
+        limit: u32,
+        window: Duration,
+    ) -> Option<u64> {
+        let mut hits = table.lock().expect("rate lock");
         let now = Instant::now();
         if hits.len() > 10_000 {
-            let window = self.cfg.rate_window;
             hits.retain(|_, (start, _)| now.duration_since(*start) < window);
         }
         let entry = hits.entry(key.to_string()).or_insert((now, 0));
-        if now.duration_since(entry.0) >= self.cfg.rate_window {
+        if now.duration_since(entry.0) >= window {
             *entry = (now, 0);
         }
         entry.1 += 1;
-        if entry.1 > self.cfg.rate_limit {
-            let wait = self
-                .cfg
-                .rate_window
-                .saturating_sub(now.duration_since(entry.0));
+        if entry.1 > limit {
+            let wait = window.saturating_sub(now.duration_since(entry.0));
             return Some(wait.as_secs().max(1));
         }
         None
+    }
+
+    fn insert_run(&self, id: String, run: Run) -> Arc<Run> {
+        let run = Arc::new(run);
+        let mut store = self.runs.lock().expect("run store lock");
+        let ttl = self.cfg.job_ttl;
+        let expired: Vec<String> = store
+            .map
+            .iter()
+            .filter(|(_, r)| r.created.elapsed() >= ttl)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in expired {
+            store.map.remove(&k);
+            store.order.retain(|o| o != &k);
+        }
+        while store.map.len() >= 200 {
+            match store.order.pop_front() {
+                Some(old) => {
+                    store.map.remove(&old);
+                }
+                None => break,
+            }
+        }
+        store.order.push_back(id.clone());
+        store.map.insert(id, run.clone());
+        run
+    }
+
+    fn run(&self, id: &str) -> Option<Arc<Run>> {
+        let store = self.runs.lock().expect("run store lock");
+        let run = store.map.get(id)?.clone();
+        (run.created.elapsed() < self.cfg.job_ttl).then_some(run)
     }
 }
 
@@ -256,6 +347,11 @@ pub fn router(app: Arc<App>) -> Router {
             "/api/resurrections",
             post(create).layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
         )
+        .route(
+            "/api/live",
+            post(live_create).layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
+        )
+        .route("/api/live/{id}", get(live_show))
         .route("/api/resurrections/{id}", get(show))
         .route("/api/resurrections/{id}/archive.zip", get(download))
         .route("/p/{id}", get(preview_redirect))
@@ -534,6 +630,222 @@ fn serve_entry(app: &App, job: &Job, path: &str) -> Result<Response, ApiError> {
     );
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(res)
+}
+
+// ---------------------------------------------------------------- live mode
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LiveBody {
+    url: String,
+    date: String,
+    #[serde(default)]
+    rights: bool,
+}
+
+/// Counts a running live job and releases the slot when dropped.
+struct LiveSlot(Arc<App>);
+
+impl Drop for LiveSlot {
+    fn drop(&mut self) {
+        self.0.live_active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+async fn live_create(
+    State(app): State<Arc<App>>,
+    Extension(client): Extension<ClientKey>,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if let Some(wait) = app.live_rate_check(&client.0) {
+        let mut e = ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "Live restores are limited so the archive stays polite. Try again shortly.",
+        );
+        e.retry_after = Some(wait);
+        return Err(e);
+    }
+    let bytes = body.map_err(|r| {
+        if r.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "body_too_large",
+                format!("The request body is limited to {MAX_BODY_BYTES} bytes."),
+            )
+        } else {
+            ApiError::bad("bad_body", "Could not read the request body.")
+        }
+    })?;
+    let req: LiveBody = serde_json::from_slice(&bytes)
+        .map_err(|e| ApiError::bad("bad_request", format!("Invalid request: {e}")))?;
+
+    if !req.rights {
+        return Err(ApiError::bad(
+            "rights_required",
+            "Confirm that the site is yours, or that you have the right to restore it.",
+        ));
+    }
+    let target = live::parse_target(&req.url).map_err(|e| ApiError::bad("bad_url", e.0))?;
+    let target_ts = parse_day_end(&req.date)
+        .ok_or_else(|| ApiError::bad("bad_date", "Use a real date written YYYY-MM-DD."))?;
+
+    // Take a slot, or say the service is busy (L3.3).
+    let active = app.live_active.fetch_add(1, Ordering::SeqCst);
+    if active >= app.cfg.live_max_concurrent {
+        app.live_active.fetch_sub(1, Ordering::SeqCst);
+        let mut e = ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "busy",
+            "Other live restores are running. Try again in a minute.",
+        );
+        e.retry_after = Some(30);
+        return Err(e);
+    }
+    let slot = LiveSlot(app.clone());
+
+    let run_id = new_id()?;
+    let progress = Arc::new(Mutex::new(live::Progress {
+        stage: "Starting".to_string(),
+        requests: 0,
+    }));
+    let mut notes = Vec::new();
+    if target.dropped_query {
+        notes.push(
+            "The query string and fragment were ignored. Only the site and path are used."
+                .to_string(),
+        );
+    }
+    let run = app.insert_run(
+        run_id.clone(),
+        Run {
+            created: Instant::now(),
+            progress: progress.clone(),
+            state: Mutex::new(RunState::Running),
+            notes,
+        },
+    );
+
+    let worker_app = app.clone();
+    let date = req.date.clone();
+    tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        let outcome = run_live(&worker_app, &target, target_ts, &date, progress);
+        let mut state = run.state.lock().expect("run state lock");
+        *state = match outcome {
+            Ok((strict, nearest)) => RunState::Done { strict, nearest },
+            Err((code, message)) => RunState::Failed { code, message },
+        };
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(
+            json!({ "id": run_id, "status": "running", "urls": { "self": format!("/api/live/{run_id}") } }),
+        ),
+    ))
+}
+
+/// One set of archive requests feeds both the strict and the nearest-capture restore (L3.4).
+fn run_live(
+    app: &Arc<App>,
+    target: &live::LiveTarget,
+    target_ts: i64,
+    date: &str,
+    progress: Arc<Mutex<live::Progress>>,
+) -> Result<(String, String), (&'static str, String)> {
+    let source = live::LiveSource::new(app.archive.clone(), target_ts, progress.clone());
+    let limits = Limits::new(live::MAX_LIVE_ASSETS, live::MAX_LIVE_TOTAL_BYTES);
+    let make = |include_anachronisms| PipelineRequest {
+        site: target.site.clone(),
+        page: target.page.clone(),
+        target: target_ts,
+        include_anachronisms,
+    };
+
+    let strict = resurrect_with(&source, &make(false), limits).map_err(map_pipeline_error)?;
+    let nearest = resurrect_with(&source, &make(true), limits).map_err(map_pipeline_error)?;
+
+    let save =
+        |result: Resurrection, policy: &'static str| -> Result<String, (&'static str, String)> {
+            let id = new_id().map_err(|_| ("internal", "No randomness available.".to_string()))?;
+            app.insert(
+                id.clone(),
+                Job {
+                    example_id: format!("live-{}", target.site),
+                    date: date.to_string(),
+                    policy,
+                    created: Instant::now(),
+                    result,
+                },
+            );
+            Ok(id)
+        };
+    let strict_id = save(strict, "strict")?;
+    let nearest_id = save(nearest, "with-anachronisms")?;
+    Ok((strict_id, nearest_id))
+}
+
+fn map_pipeline_error(e: PipelineError) -> (&'static str, String) {
+    match e {
+        PipelineError::NoCapture { detail, .. } => (
+            "no_capture",
+            format!("The archive has nothing usable for this page at that date. {detail}"),
+        ),
+        // A failed lookup is not "no capture" (L2.2).
+        PipelineError::PageUnknown(why) => (
+            "archive_unavailable",
+            format!("The archive could not be reached for this page: {why}"),
+        ),
+        PipelineError::Source(why) => (
+            "archive_unavailable",
+            format!("The archive could not supply the page: {why}"),
+        ),
+        PipelineError::TooManyAssets { found, cap } => (
+            "too_many_assets",
+            format!("This page uses {found} files. Live restores are limited to {cap}."),
+        ),
+        PipelineError::TooLarge { cap_bytes } => (
+            "too_large",
+            format!(
+                "This page is larger than the live limit of {} MiB.",
+                cap_bytes / (1024 * 1024)
+            ),
+        ),
+        other => ("cannot_restore", format!("{other:?}")),
+    }
+}
+
+async fn live_show(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let run = app.run(&id).ok_or_else(ApiError::not_found)?;
+    let state = run.state.lock().expect("run state lock");
+    let body = match &*state {
+        RunState::Running => {
+            let p = run.progress.lock().expect("progress lock");
+            json!({ "id": id, "status": "running", "stage": p.stage, "requests": p.requests, "notes": run.notes })
+        }
+        RunState::Failed { code, message } => json!({
+            "id": id,
+            "status": "failed",
+            "error": { "code": code, "message": message },
+            "notes": run.notes,
+        }),
+        RunState::Done { strict, nearest } => {
+            let s = app.job(strict).ok_or_else(ApiError::not_found)?;
+            let n = app.job(nearest).ok_or_else(ApiError::not_found)?;
+            json!({
+                "id": id,
+                "status": "done",
+                "notes": run.notes,
+                "strict": job_view(strict, &s, app.cfg.job_ttl),
+                "nearest": job_view(nearest, &n, app.cfg.job_ttl),
+            })
+        }
+    };
+    Ok(Json(body))
 }
 
 // ---------------------------------------------------------------- helpers

@@ -121,6 +121,31 @@ impl SnapshotSource for SeededSource {
     }
 }
 
+/// Caps for one job. A caller can lower them. They can never be raised above the defaults (R5.11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    pub max_assets: usize,
+    pub max_bytes: usize,
+}
+
+impl Limits {
+    pub fn new(max_assets: usize, max_bytes: usize) -> Self {
+        Self {
+            max_assets: max_assets.min(MAX_ASSETS),
+            max_bytes: max_bytes.min(MAX_BYTES),
+        }
+    }
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_assets: MAX_ASSETS,
+            max_bytes: MAX_BYTES,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     /// Site host, for example `y2k.gov`.
@@ -207,6 +232,16 @@ pub fn resurrect(
     source: &dyn SnapshotSource,
     req: &Request,
 ) -> Result<Resurrection, PipelineError> {
+    resurrect_with(source, req, Limits::default())
+}
+
+pub fn resurrect_with(
+    source: &dyn SnapshotSource,
+    req: &Request,
+    limits: Limits,
+) -> Result<Resurrection, PipelineError> {
+    // Callers cannot raise the caps by constructing the struct by hand.
+    let limits = Limits::new(limits.max_assets, limits.max_bytes);
     if req.site.is_empty() || req.site.contains('/') {
         return Err(PipelineError::InvalidRequest(
             "site must be a bare host".into(),
@@ -259,10 +294,10 @@ pub fn resurrect(
         },
     )
     .map_err(rewrite_error)?;
-    if discovery.assets.len() > MAX_ASSETS {
+    if discovery.assets.len() > limits.max_assets {
         return Err(PipelineError::TooManyAssets {
             found: discovery.assets.len(),
-            cap: MAX_ASSETS,
+            cap: limits.max_assets,
         });
     }
 
@@ -315,9 +350,9 @@ pub fn resurrect(
             match source.body(&label, &cap) {
                 Ok(bytes) => {
                     total_bytes += bytes.len();
-                    if total_bytes > MAX_BYTES {
+                    if total_bytes > limits.max_bytes {
                         return Err(PipelineError::TooLarge {
-                            cap_bytes: MAX_BYTES,
+                            cap_bytes: limits.max_bytes,
                         });
                     }
                     record.included = true;

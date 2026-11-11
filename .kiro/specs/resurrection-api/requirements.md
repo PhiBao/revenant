@@ -23,3 +23,18 @@ Source: PLAN.md §12.7 and §12.8, as amended by §R. Format: EARS.
 - A4.1 `GET /api/examples` SHALL list the seeded examples with title, site, page, default date, and rights basis.
 - A4.2 Every response from a seeded job SHALL carry mode `SEEDED`. The API SHALL NOT report `LIVE` until a live source exists.
 - A4.3 `GET /api/health` SHALL answer 200.
+
+## L Live mode (added Nov 11, 2026)
+
+- L1.1 WHEN a client POSTs `/api/live` with `url`, `date`, `policy`-independent options, and `rights: true` THEN the system SHALL start a run and answer 202 with a run id. WHEN `rights` is missing or false THEN it SHALL answer 400 `rights_required` and start nothing.
+- L1.2 The system SHALL NOT fetch the URL the user typed. The URL SHALL only be sent, percent-encoded, as a query parameter to the archive's index. Every outgoing request SHALL go to the single archive host named in the server's configuration.
+- L1.3 The system SHALL reject, with 400 `bad_url`: a scheme other than http or https, user info, an IP address, `localhost`, a host without a dot, a host longer than 253 bytes, and any URL longer than 2048 bytes.
+- L1.4 The system SHALL use only the host and path of the URL. It SHALL ignore the query string and fragment, and SHALL say so in the run's notes.
+- L2.1 `GET /api/live/{run}` SHALL return `status` (`running`, `done` or `failed`), progress (`stage`, `done`, `total`) while running, and, when done, the strict and the nearest-capture job views in the same shape as `POST /api/resurrections`.
+- L2.2 WHEN a run fails THEN the response SHALL carry a code (`no_capture`, `archive_unavailable`, `too_large`, `too_many_assets`) and a message. A failed lookup SHALL NOT be reported as `no_capture`.
+- L3.1 Archive requests SHALL be serial, at least 1.2 s apart, with a descriptive User-Agent. WHEN the archive answers 429 or 5xx THEN the system SHALL retry once, honouring `Retry-After` up to 10 s, and otherwise record the file as `UNKNOWN`.
+- L3.2 A live run SHALL fetch at most 40 assets and 8 MiB in total. A single body SHALL be at most 4 MiB. Redirects SHALL be followed only within the archive host.
+- L3.3 At most 2 live runs SHALL execute at once. WHEN the limit is reached THEN the system SHALL answer 503 `busy` with `Retry-After`.
+- L3.4 The strict and the nearest-capture jobs of one run SHALL be built from one set of archive requests, so a run costs the archive no more than a single restore.
+- L4.1 Every live result SHALL carry mode `LIVE`. Seeded results SHALL keep `SEEDED`.
+- L5.1 For live runs the system SHALL ask the index for the last capture at or before the target and the first capture after it, and SHALL NOT download the full capture list of a file.
