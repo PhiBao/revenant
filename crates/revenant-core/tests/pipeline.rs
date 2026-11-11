@@ -23,6 +23,7 @@ fn request(target: &str, include_anachronisms: bool) -> Request {
         page: "briefings.html".into(),
         target: parse_cdx_timestamp(target).expect("valid"),
         include_anachronisms,
+        nearest: false,
     }
 }
 
@@ -52,9 +53,34 @@ fn zip_names(zip: &[u8]) -> Vec<String> {
     names
 }
 
+const IMAGES: [&str; 6] = [
+    "images/1.gif",
+    "images/3.gif",
+    "images/4.gif",
+    "images/5.gif",
+    "images/6.gif",
+    "images/7.gif",
+];
+
+fn record<'a>(
+    c: &'a revenant_core::pipeline::Certificate,
+    path: &str,
+) -> &'a revenant_core::pipeline::FileRecord {
+    c.files
+        .iter()
+        .find(|f| f.path == path)
+        .expect("file in certificate")
+}
+
+/// The server dates (R6) turn the six images from anachronisms into attested files.
+/// At midnight the page is still uncertain: it was replaced at 01:06, and nothing says
+/// whether the old copy or the new one was live at 00:00.
 #[test]
-fn seeded_restore_includes_anachronisms_when_asked() {
-    let r = resurrect(&fixture(), &request("20000302000000", true)).expect("restores");
+fn at_midnight_the_images_are_attested_and_the_page_is_uncertain() {
+    let r = resurrect(&fixture(), &request("20000302000000", false)).expect("restores");
+    let c = &r.certificate;
+    assert_eq!(c.mode, Mode::Seeded);
+    assert_eq!(c.policy, "strict");
     assert_eq!(
         zip_names(&r.zip),
         [
@@ -68,38 +94,189 @@ fn seeded_restore_includes_anachronisms_when_asked() {
             "images/7.gif",
         ]
     );
-    let c = &r.certificate;
-    assert_eq!(c.mode, Mode::Seeded);
-    assert_eq!(c.policy, "include-anachronisms");
     assert_eq!(c.files[0].verdict, "UNCERTAIN");
-    // Completeness 7 of 12 files; no file is Proven or Likely, so fidelity is 0.
+    assert_eq!(c.files[0].capture_time.as_deref(), Some("20000301091452"));
+    for img in IMAGES {
+        let f = record(c, img);
+        assert_eq!(f.verdict, "ATTESTED", "{img}");
+        assert_eq!(f.verdict_from_dates_only, "ANACHRONISM", "{img}");
+        assert!(f.included, "{img}");
+        assert_eq!(
+            f.origin_modified.as_deref().map(|d| &d[..8]),
+            Some("19991227"),
+            "{img}"
+        );
+        assert!(f.basis.contains("1999-12-27"), "{}", f.basis);
+        assert_eq!(f.delta_days, Some(2), "{img} was captured two days later");
+    }
+    // 7 of 12 files recovered. Six of those seven are attested; the page is not.
     assert_eq!(c.vitals.completeness_percent, Some(58.3));
-    assert_eq!(c.vitals.fidelity_percent, Some(0.0));
-    assert_eq!(c.vitals.unknown_files, 0);
-    // The six images are first archived two days after the target.
-    let anachronisms: Vec<_> = c
-        .files
-        .iter()
-        .filter(|f| f.verdict == "ANACHRONISM")
-        .collect();
-    assert_eq!(anachronisms.len(), 6);
-    assert!(anachronisms
-        .iter()
-        .all(|f| f.included && f.delta_days == Some(2)));
+    assert_eq!(c.vitals.fidelity_percent, Some(85.7));
+    // From capture dates alone nothing could be trusted: the figure the v1 model reported.
+    assert_eq!(c.vitals_from_dates_only.completeness_percent, Some(58.3));
+    assert_eq!(c.vitals_from_dates_only.fidelity_percent, Some(0.0));
+}
+
+/// By the end of 2000-03-02 the page had been replaced (01:06). The newer copy is the true one,
+/// and the latest capture before the day is stale. This is the finding that started R6.
+#[test]
+fn at_the_end_of_the_day_the_replaced_page_is_attested_and_the_older_copy_is_not_used() {
+    let r = resurrect(&fixture(), &request("20000302235959", false)).expect("restores");
+    let c = &r.certificate;
+    let page = &c.files[0];
+    assert_eq!(page.verdict, "ATTESTED");
+    assert_eq!(page.verdict_from_dates_only, "UNCERTAIN");
+    assert_eq!(
+        page.capture_time.as_deref(),
+        Some("20000304041110"),
+        "copy B, not copy A"
+    );
+    assert!(page.basis.contains("2000-03-02"), "{}", page.basis);
+    assert_eq!(c.vitals.fidelity_percent, Some(100.0));
+    assert_eq!(c.vitals_from_dates_only.fidelity_percent, Some(0.0));
+}
+
+/// A file whose only copy the server shows was made after the date is a confirmed anachronism,
+/// and the strict policy leaves it out while the permissive one keeps it (R6.4).
+#[test]
+fn a_confirmed_anachronism_is_left_out_under_strict_and_kept_when_asked() {
+    // The mock target is 2000-06-01. Both images were first captured on 2000-07-02.
+    let mut m = mock_with_page(r#"<img src="new.gif"><img src="old.gif">"#);
+
+    // new.gif: the server says it was made on 2000-07-01, after the target.
+    let mut new_gif = cap("20000702000000", "N");
+    new_gif.origin_modified = Some(parse_cdx_timestamp("20000701000000").unwrap());
+    m.lookups
+        .insert("s.org/new.gif".into(), Lookup::Captures(vec![new_gif]));
+    m.bodies.insert("s.org/new.gif".into(), b"GIF8new".to_vec());
+
+    // old.gif: the server says it last changed in 1999, long before the target.
+    let mut old_gif = cap("20000702000000", "O");
+    old_gif.origin_modified = Some(parse_cdx_timestamp("19990101000000").unwrap());
+    m.lookups
+        .insert("s.org/old.gif".into(), Lookup::Captures(vec![old_gif]));
+    m.bodies.insert("s.org/old.gif".into(), b"GIF8old".to_vec());
+
+    let strict = resurrect(&m, &mock_request()).unwrap();
+    let new = record(&strict.certificate, "new.gif");
+    assert_eq!(new.verdict, "ANACHRONISM");
+    assert!(!new.included);
+    assert!(new.note.as_deref().unwrap().contains("made after the date"));
+    let old = record(&strict.certificate, "old.gif");
+    assert_eq!(old.verdict, "ATTESTED");
+    assert!(old.included);
+
+    let mut permissive = mock_request();
+    permissive.include_anachronisms = true;
+    let kept = resurrect(&m, &permissive).unwrap();
+    assert!(record(&kept.certificate, "new.gif").included);
 }
 
 #[test]
-fn strict_policy_keeps_anachronisms_out_but_lists_them() {
-    let r = resurrect(&fixture(), &request("20000302000000", false)).expect("restores");
-    assert_eq!(zip_names(&r.zip), [CERTIFICATE_PATH, "briefings.html"]);
-    let left_out: Vec<_> = r
-        .certificate
-        .files
-        .iter()
-        .filter(|f| f.verdict == "ANACHRONISM")
-        .collect();
-    assert_eq!(left_out.len(), 6);
-    assert!(left_out.iter().all(|f| !f.included && f.note.is_some()));
+fn the_source_is_asked_for_a_server_date_only_when_it_could_change_the_answer() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Counting {
+        inner: Mock,
+        asked: AtomicUsize,
+    }
+    impl SnapshotSource for Counting {
+        fn mode(&self) -> Mode {
+            Mode::Live
+        }
+        fn archive_name(&self) -> &str {
+            "counting"
+        }
+        fn lookup(&self, label: &str) -> Lookup {
+            self.inner.lookup(label)
+        }
+        fn body(&self, label: &str, c: &Capture) -> Result<Vec<u8>, SourceError> {
+            self.inner.body(label, c)
+        }
+        fn origin_modified(&self, _l: &str, _c: &Capture) -> Result<Option<i64>, SourceError> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+    }
+    let mut m =
+        mock_with_page(r#"<img src="proven.gif"><img src="later.gif"><img src="gone.gif">"#);
+    // Proven (same content both sides): no question needed.
+    m.lookups.insert(
+        "s.org/proven.gif".into(),
+        Lookup::Captures(vec![cap("20000101000000", "X"), cap("20000901000000", "X")]),
+    );
+    // Only a later copy: the server date could matter, so it is asked.
+    m.lookups.insert(
+        "s.org/later.gif".into(),
+        Lookup::Captures(vec![cap("20000901000000", "L")]),
+    );
+    // Missing: nothing to ask about.
+    let counting = Counting {
+        inner: m,
+        asked: AtomicUsize::new(0),
+    };
+    resurrect(&counting, &mock_request()).unwrap();
+    // The page is Likely (one capture before). Only later.gif is asked about.
+    assert_eq!(counting.asked.load(Ordering::SeqCst), 1);
+}
+
+/// R7: playback-style restore takes the capture closest in time and reports Revenant's verdicts.
+#[test]
+fn the_nearest_restore_uses_the_closest_capture_and_still_reports_revenants_verdict() {
+    let mut m = mock_with_page(r#"<img src="a.gif">"#);
+    // Target is 2000-06-01. Copy X is 40 days before; copy Y is 5 days after and differs.
+    m.lookups.insert(
+        "s.org/a.gif".into(),
+        Lookup::Captures(vec![cap("20000422000000", "X"), cap("20000606000000", "Y")]),
+    );
+    m.bodies.insert("s.org/a.gif".into(), b"GIF8bytes".to_vec());
+    // Revenant keeps the earlier copy and calls it uncertain; playback takes the closer, later one.
+    let strict = resurrect(&m, &mock_request()).unwrap();
+    let a = record(&strict.certificate, "a.gif");
+    assert_eq!(
+        (a.verdict, a.capture_time.as_deref()),
+        ("UNCERTAIN", Some("20000422000000"))
+    );
+
+    let mut nearest_req = mock_request();
+    nearest_req.nearest = true;
+    let near = resurrect(&m, &nearest_req).unwrap();
+    assert_eq!(near.certificate.policy, "nearest");
+    let a = record(&near.certificate, "a.gif");
+    assert_eq!(
+        a.capture_time.as_deref(),
+        Some("20000606000000"),
+        "the closer capture"
+    );
+    assert_eq!(
+        a.verdict, "UNCERTAIN",
+        "Revenant's verdict is still reported"
+    );
+    assert!(a
+        .note
+        .as_deref()
+        .unwrap()
+        .contains("Revenant would use the copy from 20000422000000"));
+}
+
+/// R7.3: when the two methods pick the same files, every file but the certificate matches.
+#[test]
+fn when_the_methods_agree_every_restored_file_is_identical() {
+    let strict = resurrect(&fixture(), &request("20000302235959", false)).unwrap();
+    let mut req = request("20000302235959", false);
+    req.nearest = true;
+    let near = resurrect(&fixture(), &req).unwrap();
+    let files = |r: &revenant_core::pipeline::Resurrection| {
+        r.certificate
+            .files
+            .iter()
+            .map(|f| (f.path.clone(), f.included, f.sha256.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(files(&strict), files(&near));
+    assert_ne!(
+        strict.zip_sha256, near.zip_sha256,
+        "the certificates name different policies"
+    );
 }
 
 #[test]
@@ -201,11 +378,7 @@ impl SnapshotSource for Mock {
 }
 
 fn cap(ts: &str, digest: &str) -> Capture {
-    Capture {
-        ts: parse_cdx_timestamp(ts).unwrap(),
-        digest: digest.into(),
-        content: None,
-    }
+    Capture::new(parse_cdx_timestamp(ts).unwrap(), digest)
 }
 
 fn mock_with_page(html: &str) -> Mock {
@@ -228,6 +401,7 @@ fn mock_request() -> Request {
         page: "p.html".into(),
         target: parse_cdx_timestamp("20000601000000").unwrap(),
         include_anachronisms: false,
+        nearest: false,
     }
 }
 

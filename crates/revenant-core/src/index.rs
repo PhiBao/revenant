@@ -63,11 +63,7 @@ pub fn parse_index(tsv: &str) -> Result<CaptureIndex, IndexError> {
             .by_label
             .entry(label.to_string())
             .or_default()
-            .push(Capture {
-                ts,
-                digest: digest.to_string(),
-                content: None,
-            });
+            .push(Capture::new(ts, digest));
     }
     Ok(index)
 }

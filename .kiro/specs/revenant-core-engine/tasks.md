@@ -11,3 +11,6 @@
 - [x] T9 HTML rewriter (`src/rewrite.rs`): unwrap archive URLs, repair links, strip scripts, handlers and comments. Unit, property and real-page tests. Covers R5.7.
 - [x] T10 `SnapshotSource` trait, `SeededSource::from_dir`, and `resurrect()` (`src/pipeline.rs`). 14 tests in `tests/pipeline.rs`. Covers R5.1 to R5.10.
 - [ ] T11 Live Wayback source (needs a network crate; goes in the API service, not in this crate).
+- [ ] T12 R6: `origin_modified`, `parse_http_date`, `Verdict::Attested`, `Basis`, classify rules, property tests.
+- [ ] T13 R6.8/R6.9: pipeline asks the source for the origin time, certificate records basis and dates-only vitals.
+- [ ] T14 R7: `nearest` restore.

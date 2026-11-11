@@ -553,6 +553,7 @@ async fn create(
         page: example.info.page.clone(),
         target,
         include_anachronisms: matches!(req.policy, PolicyField::IncludeAnachronisms),
+        nearest: matches!(req.policy, PolicyField::Nearest),
     };
     let source = example.source.clone();
     let outcome = tokio::task::spawn_blocking(move || resurrect(&*source, &job_req))
@@ -815,11 +816,12 @@ fn run_live(
 ) -> Result<(String, String), (&'static str, String)> {
     let source = live::LiveSource::new(app.archive.clone(), target_ts, progress.clone());
     let limits = Limits::new(live::MAX_LIVE_ASSETS, live::MAX_LIVE_TOTAL_BYTES);
-    let make = |include_anachronisms| PipelineRequest {
+    let make = |nearest: bool| PipelineRequest {
         site: target.site.clone(),
         page: target.page.clone(),
         target: target_ts,
-        include_anachronisms,
+        include_anachronisms: false,
+        nearest,
     };
 
     let strict = resurrect_with(&source, &make(false), limits).map_err(map_pipeline_error)?;

@@ -9,11 +9,11 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::autopsy::{summarize, LedgerRow};
-use crate::fidelity::{classify, Capture, Verdict};
+use crate::fidelity::{classify, nearest, Capture, Selection, Verdict};
 use crate::index::parse_index;
 use crate::package::{build_zip, sha256_hex, Entry, PackageError};
 use crate::rewrite::{rewrite_html, Context, RewriteError};
-use crate::time::format_cdx_timestamp;
+use crate::time::{format_cdx_timestamp, parse_http_date};
 
 pub const MAX_ASSETS: usize = 500;
 pub const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -48,6 +48,11 @@ pub trait SnapshotSource {
     fn lookup(&self, label: &str) -> Lookup;
     /// The bytes of one capture.
     fn body(&self, label: &str, capture: &Capture) -> Result<Vec<u8>, SourceError>;
+    /// The origin server's Last-Modified time for one capture, as Unix seconds (R6.8).
+    /// The default uses what the capture already carries. A live source fetches it on demand.
+    fn origin_modified(&self, _label: &str, capture: &Capture) -> Result<Option<i64>, SourceError> {
+        Ok(capture.origin_modified)
+    }
 }
 
 /// A source backed by a fixture directory: `captures.tsv`, optional `blobs.tsv`, and `blobs/`.
@@ -55,6 +60,8 @@ pub struct SeededSource {
     name: String,
     index: crate::index::CaptureIndex,
     bodies: BTreeMap<(String, String), Vec<u8>>,
+    /// Server Last-Modified times from the blob manifest, keyed like `bodies`.
+    modified: BTreeMap<(String, String), i64>,
 }
 
 impl SeededSource {
@@ -68,6 +75,7 @@ impl SeededSource {
             name: name.to_string(),
             index,
             bodies,
+            modified: BTreeMap::new(),
         })
     }
 
@@ -75,6 +83,7 @@ impl SeededSource {
     pub fn from_dir(name: &str, dir: &Path) -> Result<Self, String> {
         let captures = fs::read_to_string(dir.join("captures.tsv")).map_err(|e| e.to_string())?;
         let mut bodies = BTreeMap::new();
+        let mut modified = BTreeMap::new();
         if let Ok(manifest) = fs::read_to_string(dir.join("blobs.tsv")) {
             for line in manifest.lines().skip(1).filter(|l| !l.trim().is_empty()) {
                 let c: Vec<&str> = line.split('\t').collect();
@@ -85,10 +94,17 @@ impl SeededSource {
                 if sha256_hex(&bytes) != c[3] {
                     return Err(format!("blob {} does not match its hash", c[3]));
                 }
-                bodies.insert((c[0].to_string(), c[1].to_string()), bytes);
+                let key = (c[0].to_string(), c[1].to_string());
+                // The seventh column is the server's Last-Modified header, when it had one.
+                if let Some(date) = c.get(6).and_then(|h| parse_http_date(h)) {
+                    modified.insert(key.clone(), date);
+                }
+                bodies.insert(key, bytes);
             }
         }
-        Self::new(name, &captures, bodies)
+        let mut source = Self::new(name, &captures, bodies)?;
+        source.modified = modified;
+        Ok(source)
     }
 }
 
@@ -108,6 +124,7 @@ impl SnapshotSource for SeededSource {
             if let Some(bytes) = self.bodies.get(&key) {
                 cap.content = Some(sha256_hex(bytes));
             }
+            cap.origin_modified = self.modified.get(&key).copied();
         }
         Lookup::Captures(caps)
     }
@@ -156,6 +173,9 @@ pub struct Request {
     pub target: i64,
     /// Put anachronistic files in the ZIP (flagged in the certificate) or leave them out.
     pub include_anachronisms: bool,
+    /// Restore the way archive playback does: for every file, the capture closest in time (R7).
+    /// Revenant's verdicts are still reported, but they do not decide what goes in the ZIP.
+    pub nearest: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,8 +204,14 @@ pub enum PipelineError {
 pub struct FileRecord {
     pub path: String,
     pub verdict: &'static str,
+    /// What capture dates alone would have said (R6.9).
+    pub verdict_from_dates_only: &'static str,
+    /// Why the verdict was reached, in plain words (R6.7).
+    pub basis: String,
     pub included: bool,
     pub capture_time: Option<String>,
+    /// The origin server's Last-Modified for the chosen capture, as a CDX-style timestamp.
+    pub origin_modified: Option<String>,
     /// Chosen capture minus target, in whole days. Negative means before the target.
     pub delta_days: Option<i64>,
     pub archive_digest: Option<String>,
@@ -211,6 +237,8 @@ pub struct Certificate {
     pub archive: String,
     pub policy: &'static str,
     pub vitals: Vitals,
+    /// The same files scored from capture dates alone, so the effect of server dates is visible.
+    pub vitals_from_dates_only: Vitals,
     pub files: Vec<FileRecord>,
     pub links_not_restored: Vec<String>,
     pub scripts_removed: usize,
@@ -226,6 +254,88 @@ pub struct Resurrection {
     pub zip: Vec<u8>,
     pub zip_sha256: String,
     pub certificate: Certificate,
+}
+
+/// What the pipeline concluded about one file at the target time.
+struct Judged {
+    /// The verdict with server evidence (R6).
+    sel: Selection,
+    /// The verdict capture dates alone would give.
+    dates_only: Verdict,
+    /// All captures, with the later one's server date filled in when it was asked for.
+    caps: Vec<Capture>,
+}
+
+/// Classify one file, asking the source for a server date only when it could change the answer
+/// (R6.8).
+fn judge(source: &dyn SnapshotSource, label: &str, target: i64, caps: Vec<Capture>) -> Judged {
+    let stripped: Vec<Capture> = caps
+        .iter()
+        .cloned()
+        .map(|mut c| {
+            c.origin_modified = None;
+            c
+        })
+        .collect();
+    let dates_only = classify(target, &stripped).verdict;
+
+    let mut caps = caps;
+    let mut sel = classify(target, &caps);
+    if matches!(sel.verdict, Verdict::Anachronism | Verdict::Uncertain) {
+        let later = caps
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.ts > target)
+            .min_by_key(|(_, c)| (c.ts, c.digest.clone()))
+            .map(|(i, _)| i);
+        if let Some(i) = later {
+            if caps[i].origin_modified.is_none() {
+                // If the source cannot say, the verdict stays as the dates left it.
+                if let Ok(Some(modified)) = source.origin_modified(label, &caps[i]) {
+                    caps[i].origin_modified = Some(modified);
+                    sel = classify(target, &caps);
+                }
+            }
+        }
+    }
+    Judged {
+        sel,
+        dates_only,
+        caps,
+    }
+}
+
+/// Whether the ZIP should hold this file, and which capture to use.
+fn choose<'a>(req: &Request, j: &'a Judged) -> (bool, Option<&'a Capture>) {
+    if req.nearest {
+        let c = nearest(req.target, &j.caps);
+        return (c.is_some(), c);
+    }
+    let wanted = match j.sel.verdict {
+        Verdict::Missing | Verdict::Unknown => false,
+        Verdict::Anachronism => req.include_anachronisms,
+        _ => true,
+    };
+    (wanted, j.sel.capture.as_ref())
+}
+
+fn modified_text(c: Option<&Capture>) -> Option<String> {
+    c.and_then(|c| c.origin_modified).map(format_cdx_timestamp)
+}
+
+fn describe_choice(req: &Request, j: &Judged, used: Option<&Capture>) -> Option<String> {
+    if !req.nearest {
+        return j.sel.note.map(str::to_string);
+    }
+    let theirs = j.sel.capture.as_ref()?;
+    let used = used?;
+    if theirs.ts == used.ts {
+        return j.sel.note.map(str::to_string);
+    }
+    Some(format!(
+        "nearest capture; Revenant would use the copy from {}",
+        format_cdx_timestamp(theirs.ts)
+    ))
 }
 
 pub fn resurrect(
@@ -265,19 +375,15 @@ pub fn resurrect_with(
         Lookup::Captures(c) => c,
         Lookup::Unknown(why) => return Err(PipelineError::PageUnknown(why)),
     };
-    let page_sel = classify(req.target, &page_caps);
-    let usable = match page_sel.verdict {
-        Verdict::Missing => false,
-        Verdict::Anachronism => req.include_anachronisms,
-        _ => true,
-    };
-    if !usable {
+    let page = judge(source, &page_label, req.target, page_caps);
+    let (page_usable, page_choice) = choose(req, &page);
+    if !page_usable {
         return Err(PipelineError::NoCapture {
-            verdict: page_sel.verdict,
+            verdict: page.sel.verdict,
             detail: format!("{page_label} has no usable capture at the target time"),
         });
     }
-    let page_cap = page_sel.capture.clone().expect("usable has a capture");
+    let page_cap = page_choice.expect("usable has a capture").clone();
     let page_body = source
         .body(&page_label, &page_cap)
         .map_err(|e| PipelineError::Source(e.0))?;
@@ -301,52 +407,76 @@ pub fn resurrect_with(
         });
     }
 
-    // 3. Classify and fetch every asset.
+    // 3. Judge and fetch every asset.
     let mut total_bytes = page_body.len();
     let mut records: Vec<FileRecord> = Vec::new();
     let mut ledger: Vec<LedgerRow> = Vec::new();
+    let mut ledger_dates: Vec<LedgerRow> = Vec::new();
     let mut entries: Vec<Entry> = Vec::new();
     let mut restored: BTreeSet<String> = BTreeSet::new();
 
     ledger.push(LedgerRow {
         label: page_path.clone(),
-        verdict: page_sel.verdict,
+        verdict: page.sel.verdict,
+    });
+    ledger_dates.push(LedgerRow {
+        label: page_path.clone(),
+        verdict: page.dates_only,
     });
     restored.insert(page_path.clone());
 
     for asset in &discovery.assets {
         let label = format!("{}/{}", req.site, asset);
-        let (verdict, chosen, note): (Verdict, Option<Capture>, Option<String>) =
-            match source.lookup(&label) {
-                Lookup::Unknown(why) => (Verdict::Unknown, None, Some(why)),
-                Lookup::Captures(caps) => {
-                    let sel = classify(req.target, &caps);
-                    (sel.verdict, sel.capture, None)
-                }
-            };
-        ledger.push(LedgerRow {
-            label: asset.clone(),
-            verdict,
-        });
-
-        let wanted = match verdict {
-            Verdict::Missing | Verdict::Unknown => false,
-            Verdict::Anachronism => req.include_anachronisms,
-            _ => true,
+        let judged = match source.lookup(&label) {
+            Lookup::Unknown(why) => {
+                ledger.push(LedgerRow {
+                    label: asset.clone(),
+                    verdict: Verdict::Unknown,
+                });
+                ledger_dates.push(LedgerRow {
+                    label: asset.clone(),
+                    verdict: Verdict::Unknown,
+                });
+                records.push(FileRecord {
+                    path: asset.clone(),
+                    verdict: Verdict::Unknown.as_str(),
+                    verdict_from_dates_only: Verdict::Unknown.as_str(),
+                    basis: crate::fidelity::Basis::NotAnswered.text(),
+                    included: false,
+                    capture_time: None,
+                    origin_modified: None,
+                    delta_days: None,
+                    archive_digest: None,
+                    sha256: None,
+                    bytes: None,
+                    note: Some(why),
+                });
+                continue;
+            }
+            Lookup::Captures(caps) => judge(source, &label, req.target, caps),
         };
+
+        let (wanted, choice) = choose(req, &judged);
+        let choice = choice.cloned();
         let mut record = FileRecord {
             path: asset.clone(),
-            verdict: verdict.as_str(),
+            verdict: judged.sel.verdict.as_str(),
+            verdict_from_dates_only: judged.dates_only.as_str(),
+            basis: judged.sel.basis.text(),
             included: false,
-            capture_time: chosen.as_ref().map(|c| format_cdx_timestamp(c.ts)),
-            delta_days: chosen.as_ref().map(|c| (c.ts - req.target) / 86_400),
-            archive_digest: chosen.as_ref().map(|c| c.digest.clone()),
+            capture_time: choice.as_ref().map(|c| format_cdx_timestamp(c.ts)),
+            origin_modified: modified_text(choice.as_ref()),
+            delta_days: choice.as_ref().map(|c| (c.ts - req.target) / 86_400),
+            archive_digest: choice.as_ref().map(|c| c.digest.clone()),
             sha256: None,
             bytes: None,
-            note,
+            note: describe_choice(req, &judged, choice.as_ref()),
         };
+        let mut row_verdict = judged.sel.verdict;
+        let mut row_dates = judged.dates_only;
+
         if wanted {
-            let cap = chosen.expect("wanted has a capture");
+            let cap = choice.expect("wanted has a capture");
             match source.body(&label, &cap) {
                 Ok(bytes) => {
                     total_bytes += bytes.len();
@@ -366,18 +496,30 @@ pub fn resurrect_with(
                 }
                 Err(e) => {
                     record.verdict = Verdict::Unknown.as_str();
+                    record.verdict_from_dates_only = Verdict::Unknown.as_str();
+                    record.basis = crate::fidelity::Basis::NotAnswered.text();
                     record.note = Some(e.0);
-                    if let Some(row) = ledger.last_mut() {
-                        row.verdict = Verdict::Unknown;
-                    }
+                    row_verdict = Verdict::Unknown;
+                    row_dates = Verdict::Unknown;
                 }
             }
-        } else if verdict == Verdict::Anachronism {
-            record.note = Some("left out: first captured after the target time".into());
-        } else if verdict == Verdict::Missing {
+        } else if judged.sel.verdict == Verdict::Anachronism {
+            record.note = Some(match judged.sel.note {
+                Some(n) => format!("left out: {n}"),
+                None => "left out: first captured after the target time".into(),
+            });
+        } else if judged.sel.verdict == Verdict::Missing {
             record.note =
                 Some("no usable capture (archived only as an error page, or not at all)".into());
         }
+        ledger.push(LedgerRow {
+            label: asset.clone(),
+            verdict: row_verdict,
+        });
+        ledger_dates.push(LedgerRow {
+            label: asset.clone(),
+            verdict: row_dates,
+        });
         records.push(record);
     }
 
@@ -397,14 +539,18 @@ pub fn resurrect_with(
 
     let page_record = FileRecord {
         path: page_path.clone(),
-        verdict: page_sel.verdict.as_str(),
+        verdict: page.sel.verdict.as_str(),
+        verdict_from_dates_only: page.dates_only.as_str(),
+        basis: page.sel.basis.text(),
         included: true,
         capture_time: Some(format_cdx_timestamp(page_cap.ts)),
+        origin_modified: modified_text(Some(&page_cap)),
         delta_days: Some((page_cap.ts - req.target) / 86_400),
         archive_digest: Some(page_cap.digest.clone()),
         sha256: Some(sha256_hex(&rewritten.bytes)),
         bytes: Some(rewritten.bytes.len()),
-        note: Some("sha256 is of the rewritten page, not the archived original".into()),
+        note: describe_choice(req, &page, Some(&page_cap))
+            .or_else(|| Some("sha256 is of the rewritten page, not the archived original".into())),
     };
     entries.push(Entry {
         path: page_path.clone(),
@@ -413,8 +559,8 @@ pub fn resurrect_with(
     let mut files = vec![page_record];
     files.extend(records);
 
-    let vitals = {
-        let a = summarize(ledger);
+    let vitals_of = |rows: Vec<LedgerRow>| {
+        let a = summarize(rows);
         Vitals {
             completeness_percent: a.completeness.map(round1),
             fidelity_percent: a.fidelity.map(round1),
@@ -423,18 +569,21 @@ pub fn resurrect_with(
     };
 
     let certificate = Certificate {
-        schema: "revenant.certificate/1",
+        schema: "revenant.certificate/2",
         site: req.site.clone(),
         page: page_path,
         target_time: format_cdx_timestamp(req.target),
         mode: source.mode(),
         archive: source.archive_name().to_string(),
-        policy: if req.include_anachronisms {
+        policy: if req.nearest {
+            "nearest"
+        } else if req.include_anachronisms {
             "include-anachronisms"
         } else {
             "strict"
         },
-        vitals,
+        vitals: vitals_of(ledger),
+        vitals_from_dates_only: vitals_of(ledger_dates),
         files,
         links_not_restored: rewritten.links.clone(),
         scripts_removed: rewritten.scripts_removed,
@@ -442,6 +591,7 @@ pub fn resurrect_with(
         archive_host_text_mentions: mentions,
         notes: vec![
             "Archive digests are the archive's claim. File identity here is the SHA-256 of the bytes.",
+            "Server Last-Modified dates are the origin's claim. They are used as evidence, and ignored when they contradict the archive.",
             "Single-page scope: navigation links are not restored.",
         ],
     };

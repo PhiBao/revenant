@@ -439,11 +439,7 @@ impl LiveSource {
                 (label.to_string(), ts),
                 (row.timestamp.clone(), row.original.clone()),
             );
-            caps.push(Capture {
-                ts,
-                digest: row.digest,
-                content: None,
-            });
+            caps.push(Capture::new(ts, row.digest));
         }
         Lookup::Captures(caps)
     }

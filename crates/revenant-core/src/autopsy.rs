@@ -48,10 +48,7 @@ pub fn summarize(ledger: Vec<LedgerRow>) -> Autopsy {
         .iter()
         .filter(|r| r.verdict != Verdict::Missing)
         .collect();
-    let trusted = recovered
-        .iter()
-        .filter(|r| matches!(r.verdict, Verdict::Proven | Verdict::Likely))
-        .count();
+    let trusted = recovered.iter().filter(|r| r.verdict.is_trusted()).count();
 
     let completeness = (!answered.is_empty()).then(|| percent(recovered.len(), answered.len()));
     let fidelity = (!recovered.is_empty()).then(|| percent(trusted, recovered.len()));

@@ -51,3 +51,27 @@ Network access, de-archiving, packaging, and the HTTP API. Those belong to later
 - R5.9 Navigation links are not restored in single-page scope. The certificate SHALL list them as `links_not_restored`.
 
 - R5.11 The caller MAY lower the asset and byte caps for one request (`Limits`). A request SHALL NOT be able to raise them above 500 assets and 64 MiB.
+
+## R6 Server evidence (added Nov 12, 2026)
+
+Why: a fresh review read the origin server's own `Last-Modified` header on the demo files (`x-archive-orig-last-modified`, which the archive preserves). Six images the archive first saved on 2000-03-04 had last changed on 1999-12-27, so they existed on 2000-03-02. Capture dates alone had called all six anachronisms and reported Fidelity 0%. The page itself had been replaced at 01:06 on 2000-03-02, so the "latest capture before the day" was already stale on that day. The v1 model could not see either fact.
+
+- R6.1 A capture MAY carry `origin_modified`, the origin server's Last-Modified time as Unix seconds.
+- R6.2 WHEN no capture at or before T has the same content as the earliest capture after T (call it A), and A.origin_modified is at or before T, THEN the content at T was A's content, and the verdict SHALL be `ATTESTED` with A chosen.
+- R6.3 The server evidence SHALL be ignored, and the verdict SHALL fall back to the capture-date rules with a note, when (a) A.origin_modified is later than A's own capture time, or (b) a capture B at or before T exists, A.origin_modified is at or before B's capture time, and B's content differs from A's. In case (b) the header claims no change while the archive saw one.
+- R6.4 WHEN A.origin_modified is later than T and no capture at or before T exists THEN the verdict SHALL stay `ANACHRONISM` and carry the note that the server shows this version was made after the date.
+- R6.5 `ATTESTED` SHALL rank after `PROVEN` and before `LIKELY`, and SHALL count as trusted in Fidelity.
+- R6.6 Server evidence SHALL NOT change a `PROVEN`, `LIKELY` or `MISSING` verdict. It MAY only turn `ANACHRONISM` or `UNCERTAIN` into `ATTESTED`.
+- R6.7 Every selection SHALL carry a `basis`: the reason for the verdict in a fixed vocabulary, so a ledger can say why.
+- R6.8 The pipeline SHALL ask the source for `origin_modified` only when the verdict would be `ANACHRONISM` or `UNCERTAIN` and the later capture has none, and SHALL then classify again.
+- R6.9 The certificate SHALL report, per file, the basis and the origin time; and SHALL report the vitals computed from capture dates alone, so the effect of server evidence is visible.
+- R6.10 HTTP date parsing SHALL accept the IMF-fixdate form only. Anything else SHALL give no value and SHALL NOT panic.
+- R6.11 (resolves an earlier open question) Completeness counts a file as recovered when its verdict is anything but `MISSING` or `UNKNOWN`. `ATTESTED` and `ANACHRONISM` therefore both count as recovered. Fidelity is what separates them.
+
+## R7 Playback baseline (added Nov 12, 2026)
+
+Why: the comparison view needs a fair stand-in for what archive playback does. Playback picks, for each file, the capture closest in time, with no check that the files agree.
+
+- R7.1 A request MAY ask for the `nearest` restore: for every file, choose the capture whose time is closest to T, ties going to the earlier one, and include it unless the file is `MISSING` or `UNKNOWN`.
+- R7.2 The nearest restore SHALL still report Revenant's verdict for each file, so its ledger shows which of its files Revenant cannot vouch for.
+- R7.3 (amended Nov 12, 2026: the certificate records the policy, so whole ZIPs cannot be identical) WHEN the nearest restore and the strict restore contain the same files THEN every file except the certificate SHALL have the same bytes and the same SHA-256, so a client can tell from the two certificates that the methods agree.

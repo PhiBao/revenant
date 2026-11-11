@@ -23,6 +23,47 @@ pub fn parse_cdx_timestamp(s: &str) -> Option<i64> {
     Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
+/// Parse an HTTP date in the IMF-fixdate form, for example `Fri, 25 Feb 2000 19:22:45 GMT`.
+///
+/// Only this form is accepted (R6.10). Other historic forms, a wrong weekday name, a wrong zone,
+/// or an impossible date give `None`. Never panics.
+pub fn parse_http_date(s: &str) -> Option<i64> {
+    const DAYS: [&str; 7] = ["Mon,", "Tue,", "Wed,", "Thu,", "Fri,", "Sat,", "Sun,"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let parts: Vec<&str> = s.trim().split(' ').collect();
+    let [weekday, day, month, year, clock, zone] = parts.as_slice() else {
+        return None;
+    };
+    if !DAYS.contains(weekday) || *zone != "GMT" {
+        return None;
+    }
+    if day.len() != 2 || year.len() != 4 {
+        return None;
+    }
+    let digits = |t: &str| t.bytes().all(|b| b.is_ascii_digit());
+    if !digits(day) || !digits(year) {
+        return None;
+    }
+    let day: u32 = day.parse().ok()?;
+    let year: i64 = year.parse().ok()?;
+    let month = MONTHS.iter().position(|m| m == month)? as u32 + 1;
+
+    let clock: Vec<&str> = clock.split(':').collect();
+    let [h, m, sec] = clock.as_slice() else {
+        return None;
+    };
+    if [h, m, sec].iter().any(|t| t.len() != 2 || !digits(t)) {
+        return None;
+    }
+    let (h, m, sec): (i64, i64, i64) = (h.parse().ok()?, m.parse().ok()?, sec.parse().ok()?);
+    if day == 0 || day > days_in_month(year, month) || h > 23 || m > 59 || sec > 59 {
+        return None;
+    }
+    Some(days_from_civil(year, month, day) * 86_400 + h * 3_600 + m * 60 + sec)
+}
+
 /// Format Unix seconds (UTC) as a 14-digit CDX timestamp.
 pub fn format_cdx_timestamp(unix: i64) -> String {
     let days = unix.div_euclid(86_400);
@@ -91,6 +132,41 @@ mod tests {
         ] {
             let unix = parse_cdx_timestamp(s).expect("valid");
             assert_eq!(format_cdx_timestamp(unix), s);
+        }
+    }
+
+    #[test]
+    fn parses_the_http_dates_seen_on_the_y2k_files() {
+        // Real x-archive-orig-last-modified values (Nov 2026 review).
+        for (http, cdx) in [
+            ("Fri, 25 Feb 2000 19:22:45 GMT", "20000225192245"),
+            ("Thu, 02 Mar 2000 01:06:59 GMT", "20000302010659"),
+            ("Mon, 27 Dec 1999 19:41:03 GMT", "19991227194103"),
+        ] {
+            assert_eq!(parse_http_date(http), parse_cdx_timestamp(cdx), "{http}");
+        }
+    }
+
+    #[test]
+    fn rejects_every_other_http_date_form() {
+        for bad in [
+            "",
+            "Friday, 25-Feb-00 19:22:45 GMT",
+            "Fri Feb 25 19:22:45 2000",
+            "Fri, 25 Feb 2000 19:22:45 UTC",
+            "Fri, 25 Feb 2000 19:22:45 +0000",
+            "Fri, 5 Feb 2000 19:22:45 GMT",
+            "Fri, 25 Feb 00 19:22:45 GMT",
+            "Fri, 30 Feb 2000 19:22:45 GMT",
+            "Fri, 25 Foo 2000 19:22:45 GMT",
+            "Xyz, 25 Feb 2000 19:22:45 GMT",
+            "Fri, 25 Feb 2000 24:00:00 GMT",
+            "Fri, 25 Feb 2000 19:60:00 GMT",
+            "Fri, 25 Feb 2000 19:22 GMT",
+            "Fri,  25 Feb 2000 19:22:45 GMT",
+            "Fri, 25 Feb 2000 19:22:45 GMT extra",
+        ] {
+            assert_eq!(parse_http_date(bad), None, "accepted {bad:?}");
         }
     }
 
