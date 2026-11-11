@@ -1,0 +1,40 @@
+{
+  "name": "revenant-demo",
+  "output": "out/revenant-demo.mp4",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "voice": "en-US-GuyNeural",
+  "rate": "-4%",
+  "volume": "+0%",
+  "pad": 0.45,
+  "trim": 0.6,
+  "crf": 20,
+  "preset": "medium",
+  "burn_subtitles": true,
+  "loudness": "I=-16:TP=-1.5:LRA=11",
+  "subtitle_style": "FontName=DejaVu Sans,FontSize=30,PrimaryColour=&HFFFFFF,OutlineColour=&H80000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=46,PlayResX=1920,PlayResY=1080",
+  "theme": {
+    "bg": "#0b0c0a",
+    "accent1": "#7ee0a1",
+    "accent2": "#dcb55b",
+    "accent3": "#e0805a",
+    "ink": "#e8e3d2",
+    "muted": "#a49d87",
+    "faint": "#6f6a58",
+    "hi": "#e0805a",
+    "hi2": "#7ee0a1",
+    "subc": "#dcb55b",
+    "shade": "rgba(0,0,0,.35)"
+  },
+  "branding": {
+    "name": "REVENANT",
+    "tagline": "Bring a dead website back as it was.",
+    "sub": "And see which parts are true.",
+    "note": "Every file carries its date, its source and a verdict.",
+    "meta": "KIROWEEN 2026 &middot; RESURRECTION",
+    "headline": "A dead site, <i>as it was</i>.<br>With proof of what is true.",
+    "links": "revenant-kiroween.fly.dev &middot; github.com/PhiBao/revenant",
+    "footnote": "NOTHING IS GUESSED &middot; A FAILED LOOKUP IS UNKNOWN, NEVER MISSING"
+  }
+}
