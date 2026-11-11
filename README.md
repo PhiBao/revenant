@@ -8,6 +8,7 @@ Revenant rebuilds a page from the public web archive. Every file in the result c
 
 ## Judge quickstart
 
+0. **Open the deployed app:** <https://revenant-kiroween.fly.dev>. It sleeps when idle, so the first request after a pause takes about two seconds. Jobs and previews live in memory and do not survive a sleep; they expire after an hour anyway.
 1. **Run it.** `docker compose up`, then open <http://localhost:8080>. (Or `docker build -t revenant . && docker run --rm -p 8080:8080 revenant`.)
 2. **Try the stored specimen first.** Press *Begin autopsy*, then *Resurrect it*. It is labelled `SEEDED`.
 3. **Then try a live one.** Choose *A page of your own*, press *Try the Y2K.gov page, live*, tick the rights box. It asks the real Internet Archive, one question at a time, takes about a minute, and is labelled `LIVE`.

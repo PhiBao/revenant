@@ -1,5 +1,7 @@
-# Fly.io config. Not deployed yet: run `fly launch --copy-config --no-deploy`, then `fly deploy`.
-# The app name must be globally unique; change it if "revenant-kiroween" is taken.
+# Fly.io config. Deployed as revenant-kiroween (https://revenant-kiroween.fly.dev).
+# Deploy with: fly deploy --ha=false
+# One machine only: jobs and previews live in that machine's memory. The machine stops when idle
+# and starts on the next request, so a job or preview does not survive a stop (they expire anyway).
 app = "revenant-kiroween"
 primary_region = "iad"
 
