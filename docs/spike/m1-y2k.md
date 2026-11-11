@@ -15,22 +15,26 @@ Fourteen distinct content digests. Captures closest to a 1999-12-31 target:
 - 1999-10-13 (digest H7C62L…): the latest capture at or before the target. Gap of 79 days.
 - 2000-03-02 (digest TUVGLI…): the earliest capture after the target. Its digest differs from the previous one.
 
-Verdict for the root at T = 1999-12-31: **UNCERTAIN**. The page changed somewhere between two captures, so the version at T cannot be proven.
+Verdict for the root at T = 1999-12-31: **UNCERTAIN**. The page changed somewhere between two captures, so the version at T cannot be proven. Checked against `fixtures/snapshots/y2k/captures.tsv` by `crates/revenant-core/tests/fixture_y2k.rs`.
+
+Go/no-go: GO, with the GIF finding above. The demo's real evidence is the uncertain root page and the missing images. Both come straight from the archive index.
 
 ## Assets referenced by the 1999-10-13 homepage
-| Asset | Earliest capture | Captures | Verdict at T = 1999-12-31 |
+| Asset | Captures (all statuses) | HTTP 200 captures | Verdict at T = 1999-12-31 |
 |---|---|---|---|
-| gif/award.gif | 2000-10-13 | 1 | ANACHRONISM (+9.5 months) |
-| gif/award2.gif | 2000-10-13 | 1 | ANACHRONISM |
-| gif/linkwht.gif | 2000-10-13 | 1 | ANACHRONISM |
-| gif/splasha.gif | 2000-08-10 | 3 | ANACHRONISM (+7.3 months) |
-| gif/splashb.gif | 2013-07-16 | 2 | ANACHRONISM (+13.5 years) |
+| gif/award.gif | 1 (2000-10-13) | 0 | MISSING (archived only as 404) |
+| gif/award2.gif | 1 (2000-10-13) | 0 | MISSING |
+| gif/linkwht.gif | 1 (2000-10-13) | 0 | MISSING |
+| gif/splasha.gif | 6 (2000-08 to 2021) | 0 | MISSING |
+| gif/splashb.gif | 2 (2013-07, 2013-08) | 0 | MISSING |
 
-Every image on the 1999 homepage was first captured after the date the page was written. A naive "nearest-in-time" restore would therefore show a 1999 page with 2000–2013 images. That is the defect the fidelity model is meant to expose.
+**Correction (Nov 11, 2026).** The first version of this spike listed these images as ANACHRONISM. That was wrong. Every capture of these five GIFs is an HTTP 404 page stored under the image URL, so the images were never archived. Counting the 404 rows as captures produced the false result. The engine now keeps only HTTP 200 captures (see `crates/revenant-core/src/index.rs`), and these images classify as MISSING.
+
+This matters for the product. The archive does hold a real, provable anachronism only for the root page, not for the images. A restore must not present a 404 record as a copy of the image.
 
 External links on the page (`currents.net`, `ky3.com`, `latimes.com`) were not fetched. The restore keeps them as external links and does not archive them.
 
 ## Decisions taken from this spike
 1. Use y2k.gov as the seeded fixture for the demo.
 2. Add a fifth verdict, `UNCERTAIN`, for the case where the latest capture at or before T and the earliest capture after T have different digests. The four verdicts in PLAN.md §R.3 cannot represent this case. This is a spec amendment, to be logged in KIRO_USAGE.md.
-3. The M1 go/no-go is GO. The demo has a real anachronism and a real uncertain root, and both come from the archive, not from a constructed example.
+3. The M1 go/no-go is GO. The demo's evidence is the uncertain root and the missing images, both from the archive index. The earlier claim of a real anachronism on the GIFs is withdrawn.

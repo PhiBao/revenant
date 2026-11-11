@@ -24,5 +24,10 @@ Each file for a target time T gets exactly one verdict, decided from its capture
 ## Spec amendment (logged)
 PLAN.md §R.3 defines four verdicts. The y2k.gov spike (docs/spike/m1-y2k.md) found a root page with captures on both sides of T and different digests. None of the four verdicts fits it, so R2.3 adds `UNCERTAIN`. Judges can read this change in KIRO_USAGE.md, which records that the spec was amended before the code.
 
+Second amendment (Nov 11, 2026). Five y2k GIFs had captures only with HTTP 404. The first spike counted them as captures and called them anachronisms. That was a bug in the spike, not a property of the archive. R0 below now governs.
+
+- R0.1 WHEN an index row has a status other than 200 THEN the system SHALL NOT treat it as a capture. It SHALL count the row as dropped.
+- R0.2 A file with no 200 captures SHALL classify as `MISSING`, and the ledger SHALL say "archived only as 404" when rows were dropped.
+
 ## Out of scope for this spec
 Network access, de-archiving, packaging, and the HTTP API. Those belong to later specs.

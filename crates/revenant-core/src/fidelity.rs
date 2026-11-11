@@ -117,7 +117,8 @@ mod tests {
 
     #[test]
     fn only_a_capture_after_target_is_anachronism() {
-        // award.gif, first captured 2000-10-13.
+        // Synthetic: a single 200 capture after the target. Real y2k GIFs have no 200 captures
+        // and classify as Missing (see tests/fixture_y2k.rs).
         let s = classify(target(), &[cap("20001013054719", "A")]);
         assert_eq!(s.verdict, Verdict::Anachronism);
         assert!(s.delta_secs.expect("delta") > 0);
