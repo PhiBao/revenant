@@ -49,3 +49,14 @@ Found by running `revenant-reviewer` read-only over the live and preview code. E
 - S2 (L1.3, tightened) The system SHALL reject a host whose last label starts with an ASCII digit, so forms such as `0x7f.0x1`, `1.2.3.4`, `127.1` and `0177.0.0.1` are all refused.
 - S3 (no internal detail) Error responses SHALL carry fixed messages. Debug output and transport errors SHALL go to the log, not to the client.
 - S4 (accepted, documented) A single client can still fill the job store (findings 2 to 4 of the review). This is listed under Limitations in the README. A per-client job quota is future work.
+
+## E Server evidence and the playback baseline (added Nov 12, 2026)
+
+Source: engine requirements R6 and R7.
+
+- E1.1 The `policy` field SHALL accept `strict`, `include-anachronisms` and `nearest`. Anything else SHALL be 400 `bad_request`.
+- E1.2 A job's download file name SHALL end with its policy: `strict`, `with-anachronisms` or `nearest`.
+- E2.1 (live) The live source SHALL read a capture's server date only from the `x-archive-orig-last-modified` header of a response from the archive host. It SHALL NOT read it from page content.
+- E2.2 (live) WHEN the pipeline asks for a server date THEN the live source SHALL fetch the capture once, keep the body, and answer later requests for that body from memory, so the question costs no extra archive request when the file is then used.
+- E2.3 (live) A missing or unparseable header SHALL give no server date, and the verdict SHALL stand on capture dates alone.
+- E2.4 (live) One live run SHALL still make one set of archive requests for all its restores (L3.4).

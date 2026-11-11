@@ -33,6 +33,10 @@ struct Behavior {
     huge_replay: bool,
     /// Delay every CDX answer.
     cdx_delay_ms: u64,
+    /// Leave out the origin server's Last-Modified header (E2.3).
+    no_origin_header: bool,
+    /// Send a Last-Modified header that is not a valid HTTP date (E2.3).
+    bad_origin_header: bool,
 }
 
 struct Row {
@@ -47,6 +51,8 @@ struct Fake {
     rows: Vec<Row>,
     /// (label, ts) -> bytes
     blobs: HashMap<(String, String), Vec<u8>>,
+    /// (label, ts) -> the origin's Last-Modified header, as stored in the fixture manifest
+    modified: HashMap<(String, String), String>,
     behavior: Behavior,
     log: Mutex<Vec<String>>,
     cdx_calls: AtomicU32,
@@ -76,12 +82,16 @@ fn load_fake(behavior: Behavior) -> Arc<Fake> {
         })
         .collect();
     let mut blobs = HashMap::new();
+    let mut modified = HashMap::new();
     for line in std::fs::read_to_string(dir.join("blobs.tsv"))
         .unwrap()
         .lines()
         .skip(1)
     {
         let c: Vec<&str> = line.split('\t').collect();
+        if let Some(lm) = c.get(6).filter(|v| !v.is_empty()) {
+            modified.insert((c[0].to_string(), c[1].to_string()), (*lm).to_string());
+        }
         blobs.insert(
             (c[0].to_string(), c[1].to_string()),
             std::fs::read(dir.join("blobs").join(c[3])).unwrap(),
@@ -90,6 +100,7 @@ fn load_fake(behavior: Behavior) -> Arc<Fake> {
     Arc::new(Fake {
         rows,
         blobs,
+        modified,
         behavior,
         log: Mutex::new(Vec::new()),
         cdx_calls: AtomicU32::new(0),
@@ -177,8 +188,25 @@ async fn fake_replay(State(f): State<Arc<Fake>>, Path(rest): Path<String>) -> Re
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    match f.blobs.get(&(row.label.clone(), row.ts.clone())) {
-        Some(bytes) => bytes.clone().into_response(),
+    let key = (row.label.clone(), row.ts.clone());
+    match f.blobs.get(&key) {
+        Some(bytes) => {
+            let mut res = bytes.clone().into_response();
+            let header_value = if f.behavior.no_origin_header {
+                None
+            } else if f.behavior.bad_origin_header {
+                Some("yesterday afternoon".to_string())
+            } else {
+                f.modified.get(&key).cloned()
+            };
+            if let Some(v) = header_value {
+                res.headers_mut().insert(
+                    "x-archive-orig-last-modified",
+                    v.parse().expect("header value"),
+                );
+            }
+            res
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -381,16 +409,19 @@ async fn a_live_run_matches_the_seeded_result_and_is_labelled_live() {
         assert_eq!(v[key]["certificate"]["mode"], "LIVE");
     }
     let strict = &v["strict"]["certificate"];
-    assert_eq!(strict["files"][0]["verdict"], "UNCERTAIN");
+    // The server's Last-Modified headers, read live, settle what capture dates could not (R6).
+    assert_eq!(strict["files"][0]["verdict"], "ATTESTED");
     assert_eq!(strict["vitals"]["completeness_percent"], 58.3);
-    assert_eq!(strict["vitals"]["fidelity_percent"], 0.0);
-    let anachronisms = strict["files"]
+    assert_eq!(strict["vitals"]["fidelity_percent"], 100.0);
+    assert_eq!(strict["vitals_from_dates_only"]["fidelity_percent"], 0.0);
+    let attested = strict["files"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|f| f["verdict"] == "ANACHRONISM")
+        .filter(|f| f["verdict"] == "ATTESTED")
         .count();
-    assert_eq!(anachronisms, 6);
+    assert_eq!(attested, 7, "the page and six images");
+    assert_eq!(v["nearest"]["certificate"]["policy"], "nearest");
 
     // The nearest-capture job holds the six images, and its preview serves them.
     let preview = v["nearest"]["urls"]["preview"]
@@ -597,4 +628,74 @@ async fn transport_errors_never_reach_the_client() {
     for leak in ["HTTP 500", "network error", "127.0.0.1", "Os {", "ureq"] {
         assert!(!text.contains(leak), "response leaked {leak:?}: {text}");
     }
+}
+
+// ------------------------------------------------------------------ E2: the server date
+
+async fn run_with(behavior: Behavior) -> (Value, Arc<Fake>) {
+    let (base, fake) = spawn_fake(behavior).await;
+    let app = app_for(config(&base));
+    let id = start(&app, good(PAGE, "2000-03-02")).await;
+    let v = finish(&app, &id).await;
+    assert_eq!(v["status"], "done", "{v}");
+    (v, fake)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn without_the_origin_header_the_verdict_stands_on_capture_dates() {
+    let (v, _) = run_with(Behavior {
+        no_origin_header: true,
+        ..Behavior::default()
+    })
+    .await;
+    let strict = &v["strict"]["certificate"];
+    assert_eq!(strict["files"][0]["verdict"], "UNCERTAIN");
+    assert_eq!(strict["vitals"]["fidelity_percent"], 0.0);
+    // With no server date to go on, the six images are anachronisms again, and strict leaves
+    // them out of the ZIP.
+    let left_out = strict["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["verdict"] == "ANACHRONISM" && f["included"] == false)
+        .count();
+    assert_eq!(left_out, 6);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unparseable_origin_header_is_ignored_not_trusted() {
+    let (v, _) = run_with(Behavior {
+        bad_origin_header: true,
+        ..Behavior::default()
+    })
+    .await;
+    let strict = &v["strict"]["certificate"];
+    assert_eq!(strict["files"][0]["verdict"], "UNCERTAIN");
+    assert_eq!(strict["vitals"]["fidelity_percent"], 0.0);
+    for f in strict["files"].as_array().unwrap() {
+        assert!(f["origin_modified"].is_null(), "{f}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asking_for_the_server_date_costs_no_extra_archive_request() {
+    let (_, with_header) = run_with(Behavior::default()).await;
+    let (_, without) = run_with(Behavior {
+        no_origin_header: true,
+        ..Behavior::default()
+    })
+    .await;
+    // Same index questions either way. The body fetched to read the date is the one used later,
+    // so the replay count with the header must not exceed the count without it (E2.2).
+    assert_eq!(
+        with_header.cdx_calls.load(Ordering::SeqCst),
+        without.cdx_calls.load(Ordering::SeqCst)
+    );
+    assert!(
+        with_header.replay_calls.load(Ordering::SeqCst)
+            <= without.replay_calls.load(Ordering::SeqCst),
+        "{} vs {}",
+        with_header.replay_calls.load(Ordering::SeqCst),
+        without.replay_calls.load(Ordering::SeqCst)
+    );
 }

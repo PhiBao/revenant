@@ -223,6 +223,17 @@ impl ArchiveClient {
 
     /// GET a URL on the archive host. Follows at most three redirects, all within the host.
     fn get(&self, path_and_query: &str, limit: u64) -> Result<Vec<u8>, Unavailable> {
+        self.get_with_origin_date(path_and_query, limit)
+            .map(|f| f.bytes)
+    }
+
+    /// Like `get`, and also returns the origin server's Last-Modified header, which the archive
+    /// preserves as `x-archive-orig-last-modified` (E2.1).
+    fn get_with_origin_date(
+        &self,
+        path_and_query: &str,
+        limit: u64,
+    ) -> Result<Fetched, Unavailable> {
         let mut url = format!("{}{}", self.base, path_and_query);
         let mut retried = false;
         let mut hops = 0;
@@ -236,12 +247,18 @@ impl ArchiveClient {
             let status = resp.status().as_u16();
             match status {
                 200..=299 => {
-                    return resp
+                    let modified = resp
+                        .headers()
+                        .get("x-archive-orig-last-modified")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(revenant_core::time::parse_http_date);
+                    let bytes = resp
                         .body_mut()
                         .with_config()
                         .limit(limit)
                         .read_to_vec()
-                        .map_err(|e| Unavailable(format!("could not read the response: {e}")));
+                        .map_err(|e| Unavailable(format!("could not read the response: {e}")))?;
+                    return Ok(Fetched { bytes, modified });
                 }
                 301 | 302 | 303 | 307 | 308 => {
                     hops += 1;
@@ -313,10 +330,17 @@ impl ArchiveClient {
         parse_cdx(&body)
     }
 
-    fn replay(&self, timestamp: &str, original: &str) -> Result<Vec<u8>, Unavailable> {
+    fn replay(&self, timestamp: &str, original: &str) -> Result<Fetched, Unavailable> {
         // The original comes from the archive's own index, never from the visitor.
-        self.get(&format!("/web/{timestamp}id_/{original}"), MAX_BODY_BYTES)
+        self.get_with_origin_date(&format!("/web/{timestamp}id_/{original}"), MAX_BODY_BYTES)
     }
+}
+
+/// A replayed body and the origin server's own Last-Modified time, when the archive kept it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    pub bytes: Vec<u8>,
+    pub modified: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -376,7 +400,7 @@ pub struct Progress {
     pub requests: u32,
 }
 
-type BodyCache = Mutex<HashMap<(String, i64), Result<Vec<u8>, SourceError>>>;
+type BodyCache = Mutex<HashMap<(String, i64), Result<Fetched, SourceError>>>;
 
 /// A `SnapshotSource` backed by the live archive. One per run. It caches every answer, so the
 /// strict and the nearest-capture restore of a run cost the archive one set of requests (L3.4).
@@ -467,6 +491,18 @@ impl SnapshotSource for LiveSource {
     }
 
     fn body(&self, label: &str, capture: &Capture) -> Result<Vec<u8>, SourceError> {
+        self.fetch(label, capture).map(|f| f.bytes)
+    }
+
+    /// Fetches the capture, which also yields the server date. The result is cached, so asking
+    /// for the date and then using the body costs one archive request (E2.2).
+    fn origin_modified(&self, label: &str, capture: &Capture) -> Result<Option<i64>, SourceError> {
+        self.fetch(label, capture).map(|f| f.modified)
+    }
+}
+
+impl LiveSource {
+    fn fetch(&self, label: &str, capture: &Capture) -> Result<Fetched, SourceError> {
         let key = (label.to_string(), capture.ts);
         if let Some(hit) = self.bodies.lock().expect("body cache lock").get(&key) {
             return hit.clone();

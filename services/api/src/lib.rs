@@ -492,6 +492,8 @@ enum PolicyField {
     Strict,
     #[serde(rename = "include-anachronisms")]
     IncludeAnachronisms,
+    #[serde(rename = "nearest")]
+    Nearest,
 }
 
 fn job_view(id: &str, job: &Job, ttl: Duration) -> Value {
@@ -598,6 +600,7 @@ async fn create(
         policy: match req.policy {
             PolicyField::Strict => "strict",
             PolicyField::IncludeAnachronisms => "with-anachronisms",
+            PolicyField::Nearest => "nearest",
         },
         created: Instant::now(),
         result,
@@ -843,7 +846,7 @@ fn run_live(
             Ok(id)
         };
     let strict_id = save(strict, "strict")?;
-    let nearest_id = save(nearest, "with-anachronisms")?;
+    let nearest_id = save(nearest, "nearest")?;
     Ok((strict_id, nearest_id))
 }
 

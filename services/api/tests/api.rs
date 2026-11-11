@@ -98,8 +98,14 @@ async fn create_returns_a_seeded_job_with_certificate_and_urls() {
     let v = create(&a, "2000-03-02", "include-anachronisms").await;
     assert_eq!(v["mode"], "SEEDED");
     assert_eq!(v["id"].as_str().unwrap().len(), 32);
-    assert_eq!(v["certificate"]["files"][0]["verdict"], "UNCERTAIN");
-    assert_eq!(v["certificate"]["vitals"]["completeness_percent"], 58.3);
+    // The page was replaced at 01:06 on 2000-03-02, so by the end of that day the newer copy
+    // is the true one (R6.2).
+    let c = &v["certificate"];
+    assert_eq!(c["files"][0]["verdict"], "ATTESTED");
+    assert_eq!(c["files"][0]["verdict_from_dates_only"], "UNCERTAIN");
+    assert_eq!(c["vitals"]["completeness_percent"], 58.3);
+    assert_eq!(c["vitals"]["fidelity_percent"], 100.0);
+    assert_eq!(c["vitals_from_dates_only"]["fidelity_percent"], 0.0);
     let id = v["id"].as_str().unwrap();
     assert_eq!(v["urls"]["preview"], format!("/p/{id}/"));
 }
@@ -295,11 +301,16 @@ async fn preview_serves_restored_images_and_only_those() {
 }
 
 #[tokio::test]
-async fn strict_jobs_do_not_serve_left_out_images() {
+async fn strict_jobs_serve_attested_images_and_never_the_ones_that_were_not_archived() {
     let a = app(config());
     let v = create(&a, "2000-03-02", "strict").await;
     let id = v["id"].as_str().unwrap();
-    let (status, _, _) = call(&a, get(&format!("/p/{id}/images/1.gif"))).await;
+    // The server says images/1.gif had not changed since 1999, so strict keeps it (R6.2).
+    let (status, _, body) = call(&a, get(&format!("/p/{id}/images/1.gif"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.starts_with(b"GIF8"));
+    // images/8.gif was only ever archived as an error page.
+    let (status, _, _) = call(&a, get(&format!("/p/{id}/images/8.gif"))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -371,7 +382,7 @@ async fn the_certificate_file_is_served_as_json() {
     let (status, h, body) = call(&a, get(&format!("/p/{id}/REVENANT-CERTIFICATE.json"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(h[header::CONTENT_TYPE], "application/json");
-    assert_eq!(as_json(&body)["schema"], "revenant.certificate/1");
+    assert_eq!(as_json(&body)["schema"], "revenant.certificate/2");
 }
 
 // ------------------------------------------------------------ security review (A1.6, A1.7)
@@ -491,4 +502,47 @@ async fn a_bad_frame_ancestors_value_stops_the_server_from_starting() {
         ..config()
     })
     .is_ok());
+}
+
+// ------------------------------------------------------------ E1: the nearest policy
+
+#[tokio::test]
+async fn the_nearest_policy_is_accepted_and_named_in_the_download() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "nearest").await;
+    assert_eq!(v["policy"], "nearest");
+    assert_eq!(v["certificate"]["policy"], "nearest");
+    let id = v["id"].as_str().unwrap();
+    let (status, headers, _) = call(&a, get(&format!("/api/resurrections/{id}/archive.zip"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let disposition = headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+    assert!(
+        disposition.contains("revenant-y2k-briefings-2000-03-02-nearest.zip"),
+        "{disposition}"
+    );
+}
+
+/// For this page the playback-style restore and Revenant's agree on every file (R7.3), which is
+/// what the web app uses to decide whether a side-by-side comparison would show anything.
+#[tokio::test]
+async fn nearest_and_strict_agree_file_for_file_on_this_specimen() {
+    let a = app(config());
+    let strict = create(&a, "2000-03-02", "strict").await;
+    let near = create(&a, "2000-03-02", "nearest").await;
+    let files = |v: &Value| -> Vec<(String, bool, Value)> {
+        v["certificate"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["path"].as_str().unwrap().to_string(),
+                    f["included"].as_bool().unwrap(),
+                    f["sha256"].clone(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(files(&strict), files(&near));
+    assert_ne!(strict["zip_sha256"], near["zip_sha256"]);
 }
