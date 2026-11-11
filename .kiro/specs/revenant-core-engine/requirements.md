@@ -104,3 +104,12 @@ Why: a stylesheet is fetched and packaged today, but its contents are not read. 
 - R9.7 The asset cap SHALL count every file found this way, not only those named by the page.
 - R9.8 A stylesheet's certificate entry SHALL carry the SHA-256 of the rewritten stylesheet, and its verdict SHALL be judged like any other file.
 - R9.9 Rewriting a stylesheet twice SHALL give the same bytes as rewriting it once. It SHALL NOT panic on arbitrary bytes. Bytes outside the references SHALL be left exactly as they were.
+
+## R10 Dates-only restore (added Nov 12, 2026)
+
+Why: after R6 the strict and nearest restores of the specimen are the same page, so the comparison view (the curtain) was never shown, and the demo lost its most telling moment: the same page restored two ways. The honest "before" is not archive playback (which, here, also gives the full page). It is what a method that trusts capture dates alone would produce, which is the method Revenant started from and the one the review showed was wrong.
+
+- R10.1 A request MAY ask for the `dates-only` restore: classify and select exactly as the strict restore does, with every server date (`origin_modified`) ignored and never requested from the source.
+- R10.2 The certificate of a dates-only restore SHALL name the policy `dates-only`, SHALL carry no server dates and no `ATTESTED` verdict, and SHALL say in its notes that server dates were not used.
+- R10.3 Because the strict restore only ever promotes a file's verdict (R6), the dates-only restore SHALL NOT contain any file the strict restore lacks. Every file it leaves out that the strict restore includes is one that server evidence rescued.
+- R10.4 The dates-only restore is a comparison, not a recommendation. Nothing in the certificate or the API SHALL present it as the better result.

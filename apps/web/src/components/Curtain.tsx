@@ -3,25 +3,35 @@
 import { useId, useState } from "react";
 
 interface Props {
-  /** Restore that takes the nearest capture of everything, with no date check. */
+  /** The "before" restore, drawn on the left of the divider. */
   nearestUrl: string;
-  /** Restore that keeps only what can be shown as it was on the day. */
+  /** The restore that keeps only what can be shown as it was on the day. */
   dayUrl: string;
   dayLabel: string;
+  /** What the left side is, for example "What archive playback gives". */
+  leftLabel?: string;
+  /** Short name of the left side for the toggle button. */
+  leftShort?: string;
 }
 
 /**
  * Two restorations of the same page over one viewport. The nearest-capture restore sits on the
  * left of the divider, the as-it-was restore on the right. Both previews are sandboxed (W2.3).
  */
-export function Curtain({ nearestUrl, dayUrl, dayLabel }: Props) {
+export function Curtain({
+  nearestUrl,
+  dayUrl,
+  dayLabel,
+  leftLabel = "What archive playback gives",
+  leftShort = "Archive playback",
+}: Props) {
   const [pos, setPos] = useState(50);
   const id = useId();
 
   return (
     <figure className="curtain">
       <div className="curtain-labels" aria-hidden="true">
-        <span>What archive playback gives</span>
+        <span>{leftLabel}</span>
         <span>{dayLabel}</span>
       </div>
 
@@ -35,7 +45,7 @@ export function Curtain({ nearestUrl, dayUrl, dayLabel }: Props) {
         <iframe
           className="curtain-frame curtain-frame-nearest"
           src={nearestUrl}
-          title="What archive playback gives: the nearest capture of every file"
+          title={leftLabel}
           sandbox=""
           style={{ clipPath: `inset(0 ${100 - pos}% 0 0)` }}
         />
@@ -54,11 +64,11 @@ export function Curtain({ nearestUrl, dayUrl, dayLabel }: Props) {
           max={100}
           value={pos}
           onChange={(e) => setPos(Number(e.target.value))}
-          aria-valuetext={`${pos} percent nearest capture on the left`}
+          aria-valuetext={`${pos} percent of the left side shown`}
         />
         <div className="curtain-toggle" role="group" aria-label="Choose a restoration">
           <button type="button" aria-pressed={pos === 100} onClick={() => setPos(100)}>
-            Archive playback
+            {leftShort}
           </button>
           <button type="button" aria-pressed={pos === 0} onClick={() => setPos(0)}>
             As it was

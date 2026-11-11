@@ -633,3 +633,68 @@ async fn other_values_of_the_annotate_parameter_give_the_plain_page() {
         assert!(!String::from_utf8_lossy(&body).contains("rv-bar"), "{q}");
     }
 }
+
+// ------------------------------------------------------------------ A5: dates-only (R10)
+
+#[tokio::test]
+async fn dates_only_ignores_server_dates_and_says_so() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "dates-only").await;
+    assert_eq!(v["policy"], "dates-only");
+    let c = &v["certificate"];
+    assert_eq!(c["policy"], "dates-only");
+    for f in c["files"].as_array().unwrap() {
+        assert_ne!(f["verdict"], "ATTESTED", "{f}");
+        assert!(f["origin_modified"].is_null(), "{f}");
+    }
+    // What it scores is exactly what the strict restore reports as "from dates alone" (R10.1).
+    let strict = create(&a, "2000-03-02", "strict").await;
+    assert_eq!(
+        c["vitals"]["fidelity_percent"],
+        strict["certificate"]["vitals_from_dates_only"]["fidelity_percent"]
+    );
+    assert!(c["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n.as_str().unwrap().contains("Server dates were not used")));
+}
+
+#[tokio::test]
+async fn dates_only_never_contains_a_file_the_strict_restore_lacks() {
+    let a = app(config());
+    for date in ["2000-03-01", "2000-03-02", "2000-03-05"] {
+        let d = create(&a, date, "dates-only").await;
+        let s = create(&a, date, "strict").await;
+        let included = |v: &Value| -> Vec<String> {
+            v["certificate"]["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|f| f["included"] == true)
+                .map(|f| f["path"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let strict_files = included(&s);
+        for path in included(&d) {
+            assert!(strict_files.contains(&path), "{date}: {path}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_server_dates_rescue_files_on_the_specimen() {
+    let a = app(config());
+    let d = create(&a, "2000-03-02", "dates-only").await;
+    let s = create(&a, "2000-03-02", "strict").await;
+    let count = |v: &Value| {
+        v["certificate"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["included"] == true)
+            .count()
+    };
+    // Six images were captured only after the day. Dates alone leave them out.
+    assert_eq!(count(&s) - count(&d), 6);
+}

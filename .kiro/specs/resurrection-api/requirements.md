@@ -93,3 +93,10 @@ Amendment (Nov 12, 2026, after trying it on the real archive). With `collapse=di
 - T1.2 (replaced) The system SHALL ask the archive exactly one question, HTTP 200 captures only, collapsed to one row per calendar month (`collapse=timestamp:6`). A month's row is its first capture in that month. This bounds the answer by the number of months the archive has covered (324 for a page since 1996), whatever the crawl rate, so the whole history is always shown. `truncated` SHALL stay in the answer but SHALL be true only when the answer would exceed 600 months.
 - T1.5 (amended) The answer SHALL NOT claim anything about content. A month's row says the archive holds at least one capture in that month, and carries the digest of that first capture. Two months with different digests are "different versions the archive saw", not proof that the page changed (R4).
 - T1.7 The answer SHALL include `latest_month`: the last month that holds a capture. Unlike the earlier `latest_version_from` it is true of the whole history.
+
+## A5 Dates-only policy (added Nov 12, 2026)
+
+Source: engine requirement R10.
+
+- A5.1 `POST /api/resurrections` SHALL accept `policy: "dates-only"`.
+- A5.2 (amended Nov 12, 2026) A live run SHALL produce a dates-only restore from the same index questions as the strict one (L3.4), so it adds no index question. It MAY add body requests, one for each file whose dates-only choice is a capture the other restores did not fetch. Why: the first draft said "no extra cost", and the live test `one_run_costs_the_archive_one_set_of_requests` showed one extra page-body request. Dates alone cannot vouch for the newer copy of the specimen page, so the dates-only restore uses the older copy. On the specimen the extra cost is exactly one request. `GET /api/live/{id}` SHALL answer `dates_only` next to `strict` and `nearest`.

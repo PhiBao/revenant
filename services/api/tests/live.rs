@@ -457,7 +457,7 @@ async fn a_live_run_matches_the_seeded_result_and_is_labelled_live() {
     let id = start(&app, good(PAGE, "2000-03-02")).await;
     let v = finish(&app, &id).await;
     assert_eq!(v["status"], "done", "{v}");
-    for key in ["strict", "nearest"] {
+    for key in ["strict", "nearest", "dates_only"] {
         assert_eq!(v[key]["mode"], "LIVE");
         assert_eq!(v[key]["certificate"]["mode"], "LIVE");
     }
@@ -475,6 +475,12 @@ async fn a_live_run_matches_the_seeded_result_and_is_labelled_live() {
         .count();
     assert_eq!(attested, 7, "the page and six images");
     assert_eq!(v["nearest"]["certificate"]["policy"], "nearest");
+    // The dates-only restore trusts no server date, so it scores what dates alone scored (A5).
+    assert_eq!(v["dates_only"]["certificate"]["policy"], "dates-only");
+    assert_eq!(
+        v["dates_only"]["certificate"]["vitals"]["fidelity_percent"],
+        strict["vitals_from_dates_only"]["fidelity_percent"]
+    );
 
     // The nearest-capture job holds the six images, and its preview serves them.
     let preview = v["nearest"]["urls"]["preview"]
@@ -498,8 +504,9 @@ async fn one_run_costs_the_archive_one_set_of_requests() {
     assert_eq!(finish(&app, &id).await["status"], "done");
     // The page and its 11 assets each need one index question, once (L6.1).
     assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 1 + 11);
-    // The page body once, plus the six images the nearest restore includes.
-    assert_eq!(fake.replay_calls.load(Ordering::SeqCst), 1 + 6);
+    // The page body once, plus the six images the nearest restore includes, plus the older copy
+    // of the page that the dates-only restore chooses (A5.2). No extra index question.
+    assert_eq!(fake.replay_calls.load(Ordering::SeqCst), 1 + 6 + 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

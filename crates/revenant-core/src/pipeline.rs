@@ -179,6 +179,9 @@ pub struct Request {
     /// Restore the way archive playback does: for every file, the capture closest in time (R7).
     /// Revenant's verdicts are still reported, but they do not decide what goes in the ZIP.
     pub nearest: bool,
+    /// Classify from capture dates alone: ignore every server date and never ask for one (R10).
+    /// A comparison against the strict restore, not a recommendation.
+    pub dates_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,7 +297,13 @@ struct Judged {
 
 /// Classify one file, asking the source for a server date only when it could change the answer
 /// (R6.8).
-fn judge(source: &dyn SnapshotSource, label: &str, target: i64, caps: Vec<Capture>) -> Judged {
+fn judge(
+    source: &dyn SnapshotSource,
+    label: &str,
+    target: i64,
+    caps: Vec<Capture>,
+    use_server_dates: bool,
+) -> Judged {
     let stripped: Vec<Capture> = caps
         .iter()
         .cloned()
@@ -305,6 +314,14 @@ fn judge(source: &dyn SnapshotSource, label: &str, target: i64, caps: Vec<Captur
         .collect();
     let dates_only = classify(target, &stripped).verdict;
 
+    if !use_server_dates {
+        // R10.1: the dates-only restore sees no server date at all.
+        return Judged {
+            sel: classify(target, &stripped),
+            dates_only,
+            caps: stripped,
+        };
+    }
     let mut caps = caps;
     let mut sel = classify(target, &caps);
     if matches!(sel.verdict, Verdict::Anachronism | Verdict::Uncertain) {
@@ -401,7 +418,7 @@ pub fn resurrect_with(
         Lookup::Captures(c) => c,
         Lookup::Unknown(why) => return Err(PipelineError::PageUnknown(why)),
     };
-    let page = judge(source, &page_label, req.target, page_caps);
+    let page = judge(source, &page_label, req.target, page_caps, !req.dates_only);
     let (page_usable, page_choice) = choose(req, &page);
     if !page_usable {
         return Err(PipelineError::NoCapture {
@@ -498,7 +515,7 @@ pub fn resurrect_with(
                 });
                 continue;
             }
-            Lookup::Captures(caps) => judge(source, &label, req.target, caps),
+            Lookup::Captures(caps) => judge(source, &label, req.target, caps, !req.dates_only),
         };
 
         let (wanted, choice) = choose(req, &judged);
@@ -678,7 +695,9 @@ pub fn resurrect_with(
         target_time: format_cdx_timestamp(req.target),
         mode: source.mode(),
         archive: source.archive_name().to_string(),
-        policy: if req.nearest {
+        policy: if req.dates_only {
+            "dates-only"
+        } else if req.nearest {
             "nearest"
         } else if req.include_anachronisms {
             "include-anachronisms"
@@ -696,7 +715,11 @@ pub fn resurrect_with(
         notes: vec![
             "Archive digests are the archive's claim. File identity here is the SHA-256 of the bytes.",
             "The SHA-256 of the page is of the rewritten page, not the archived original.",
-            "Server Last-Modified dates are the origin's claim. They are used as evidence, and ignored when they contradict the archive.",
+            if req.dates_only {
+                "Server dates were not used in this restore. It is a comparison made from capture dates alone."
+            } else {
+                "Server Last-Modified dates are the origin's claim. They are used as evidence, and ignored when they contradict the archive."
+            },
             "Single-page scope: navigation links are not restored.",
         ],
     };

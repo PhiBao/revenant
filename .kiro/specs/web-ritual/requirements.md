@@ -71,3 +71,13 @@ Why: on Fly.io the machine stops when idle. Recording the demo against the deplo
 - W9.1 A read request (listing the examples, polling a live run) SHALL be retried when the network fails or the answer is 502, 503 or 504, up to four attempts with growing waits (about 0.8 s, 1.6 s, 3.2 s). It SHALL NOT be retried on any other status, because a 4xx or 5xx from the application is an answer.
 - W9.2 While the retries run, the page SHALL keep showing its loading text, not an error. Only when every attempt fails SHALL it show the unreachable message with the retry button.
 - W9.3 A request that creates something (starting a run, a timeline lookup) SHALL NOT be retried automatically. Repeating it could start two runs and use two of the archive's rate-limit slots. The unreachable message with a retry button is the right answer there.
+
+## W10 The curtain returns (added Nov 12, 2026)
+
+Source: engine requirement R10. Amends W6.3, W6.4 and W6.5.
+
+- W10.1 The page SHALL ask for three restores: strict, nearest, and dates-only.
+- W10.2 WHEN the dates-only restore and the strict restore differ THEN the comparison view SHALL be shown, with the labels "Capture dates alone" (left) and "With the server's own dates" (right), and a caption saying how many files the server's dates rescued.
+- W10.3 WHEN they do not differ THEN the comparison view SHALL NOT be shown (W6.4 stands for this case), and the page SHALL say the server's dates changed nothing here.
+- W10.4 The nearest restore SHALL still be used for the statement "archive playback and Revenant give the same page" (W6.4), and no longer for the curtain.
+- W10.5 The caption SHALL NOT call the left side wrong or fake. It SHALL say what a method that trusts capture dates alone leaves out.

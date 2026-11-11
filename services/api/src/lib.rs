@@ -146,8 +146,15 @@ impl Store {
 
 enum RunState {
     Running,
-    Done { strict: String, nearest: String },
-    Failed { code: &'static str, message: String },
+    Done {
+        strict: String,
+        nearest: String,
+        dates_only: String,
+    },
+    Failed {
+        code: &'static str,
+        message: String,
+    },
 }
 
 struct Run {
@@ -513,6 +520,8 @@ enum PolicyField {
     IncludeAnachronisms,
     #[serde(rename = "nearest")]
     Nearest,
+    #[serde(rename = "dates-only")]
+    DatesOnly,
 }
 
 fn job_view(id: &str, job: &Job, ttl: Duration) -> Value {
@@ -575,6 +584,7 @@ async fn create(
         target,
         include_anachronisms: matches!(req.policy, PolicyField::IncludeAnachronisms),
         nearest: matches!(req.policy, PolicyField::Nearest),
+        dates_only: matches!(req.policy, PolicyField::DatesOnly),
     };
     let source = example.source.clone();
     let outcome = tokio::task::spawn_blocking(move || resurrect(&*source, &job_req))
@@ -620,6 +630,7 @@ async fn create(
             PolicyField::Strict => "strict",
             PolicyField::IncludeAnachronisms => "with-anachronisms",
             PolicyField::Nearest => "nearest",
+            PolicyField::DatesOnly => "dates-only",
         },
         created: Instant::now(),
         result,
@@ -853,7 +864,11 @@ async fn live_create(
         let outcome = run_live(&worker_app, &target, target_ts, &date, progress);
         let mut state = run.state.lock().expect("run state lock");
         *state = match outcome {
-            Ok((strict, nearest)) => RunState::Done { strict, nearest },
+            Ok((strict, nearest, dates_only)) => RunState::Done {
+                strict,
+                nearest,
+                dates_only,
+            },
             Err((code, message)) => RunState::Failed { code, message },
         };
     });
@@ -873,19 +888,25 @@ fn run_live(
     target_ts: i64,
     date: &str,
     progress: Arc<Mutex<live::Progress>>,
-) -> Result<(String, String), (&'static str, String)> {
+) -> Result<(String, String, String), (&'static str, String)> {
     let source = live::LiveSource::new(app.archive.clone(), target_ts, progress.clone());
     let limits = Limits::new(live::MAX_LIVE_ASSETS, live::MAX_LIVE_TOTAL_BYTES);
-    let make = |nearest: bool| PipelineRequest {
+    let make = |nearest: bool, dates_only: bool| PipelineRequest {
         site: target.site.clone(),
         page: target.page.clone(),
         target: target_ts,
         include_anachronisms: false,
         nearest,
+        dates_only,
     };
 
-    let strict = resurrect_with(&source, &make(false), limits).map_err(map_pipeline_error)?;
-    let nearest = resurrect_with(&source, &make(true), limits).map_err(map_pipeline_error)?;
+    let strict =
+        resurrect_with(&source, &make(false, false), limits).map_err(map_pipeline_error)?;
+    let nearest =
+        resurrect_with(&source, &make(true, false), limits).map_err(map_pipeline_error)?;
+    // A comparison made from capture dates alone. It reuses what the strict run fetched (A5.2).
+    let dates_only =
+        resurrect_with(&source, &make(false, true), limits).map_err(map_pipeline_error)?;
 
     let save =
         |result: Resurrection, policy: &'static str| -> Result<String, (&'static str, String)> {
@@ -904,7 +925,8 @@ fn run_live(
         };
     let strict_id = save(strict, "strict")?;
     let nearest_id = save(nearest, "nearest")?;
-    Ok((strict_id, nearest_id))
+    let dates_only_id = save(dates_only, "dates-only")?;
+    Ok((strict_id, nearest_id, dates_only_id))
 }
 
 fn map_pipeline_error(e: PipelineError) -> (&'static str, String) {
@@ -966,15 +988,21 @@ async fn live_show(
             "error": { "code": code, "message": message },
             "notes": run.notes,
         }),
-        RunState::Done { strict, nearest } => {
+        RunState::Done {
+            strict,
+            nearest,
+            dates_only,
+        } => {
             let s = app.job(strict).ok_or_else(ApiError::not_found)?;
             let n = app.job(nearest).ok_or_else(ApiError::not_found)?;
+            let d = app.job(dates_only).ok_or_else(ApiError::not_found)?;
             json!({
                 "id": id,
                 "status": "done",
                 "notes": run.notes,
                 "strict": job_view(strict, &s, app.cfg.job_ttl),
                 "nearest": job_view(nearest, &n, app.cfg.job_ttl),
+                "dates_only": job_view(dates_only, &d, app.cfg.job_ttl),
             })
         }
     };

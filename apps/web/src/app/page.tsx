@@ -85,12 +85,13 @@ export default function Home() {
   const [liveDate, setLiveDate] = useState("");
   const [rights, setRights] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
-  const [progress, setProgress] = useState({ strict: false, nearest: false });
+  const [progress, setProgress] = useState({ strict: false, nearest: false, datesOnly: false });
   const [liveStage, setLiveStage] = useState("");
   const [liveRequests, setLiveRequests] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [strict, setStrict] = useState<Job | null>(null);
   const [nearest, setNearest] = useState<Job | null>(null);
+  const [datesOnly, setDatesOnly] = useState<Job | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -155,9 +156,10 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [phase, live]);
 
-  const succeed = useCallback((s: Job, n: Job, runNotes: string[] = []) => {
+  const succeed = useCallback((s: Job, n: Job, d: Job, runNotes: string[] = []) => {
     setStrict(s);
     setNearest(n);
+    setDatesOnly(d);
     setNotes(runNotes);
     setPhase("autopsy");
   }, []);
@@ -178,9 +180,16 @@ export default function Home() {
         setProgress((p) => ({ ...p, nearest: true }));
         return j;
       });
-      const [s, n] = await Promise.allSettled([strictP, nearestP]);
-      if (s.status === "fulfilled" && n.status === "fulfilled") return succeed(s.value, n.value);
-      const reason = s.status === "rejected" ? s.reason : n.status === "rejected" ? n.reason : null;
+      const datesP = createJob(example.id, day, "dates-only").then((j) => {
+        setProgress((p) => ({ ...p, datesOnly: true }));
+        return j;
+      });
+      const [s, n, d] = await Promise.allSettled([strictP, nearestP, datesP]);
+      if (s.status === "fulfilled" && n.status === "fulfilled" && d.status === "fulfilled") {
+        return succeed(s.value, n.value, d.value);
+      }
+      const failed = [s, n, d].find((r) => r.status === "rejected");
+      const reason = failed && failed.status === "rejected" ? failed.reason : null;
       fail((reason as Failure) ?? { kind: "network" });
     },
     [example, succeed, fail],
@@ -224,7 +233,7 @@ export default function Home() {
               verdict: state.error.code === "no_capture" ? "no usable capture" : undefined,
             });
           }
-          return succeed(state.strict, state.nearest, state.notes);
+          return succeed(state.strict, state.nearest, state.dates_only, state.notes);
         }
       } catch (e) {
         if (pollToken.current === token) fail(e as Failure);
@@ -243,8 +252,9 @@ export default function Home() {
       setRevealed(false);
       setStrict(null);
       setNearest(null);
+      setDatesOnly(null);
       setNotes([]);
-      setProgress({ strict: false, nearest: false });
+      setProgress({ strict: false, nearest: false, datesOnly: false });
       if (live) await beginLive(liveUrl, day);
       else await beginSpecimen(day);
     },
@@ -277,6 +287,17 @@ export default function Home() {
       (f) => f.included && !(strict?.certificate.files.find((g) => g.path === f.path)?.included),
     ).length ?? 0;
   const resultIsLive = strict?.mode === "LIVE";
+  // W10: the server's dates changed what can be shown. Files in the strict restore that dates alone
+  // would have left out.
+  const datesDiffer =
+    strict && datesOnly ? !sameRestore(datesOnly.certificate, strict.certificate) : false;
+  const rescued =
+    datesOnly && strict
+      ? strict.certificate.files.filter(
+          (f) =>
+            f.included && !datesOnly.certificate.files.find((g) => g.path === f.path)?.included,
+        ).length
+      : 0;
 
   return (
     <main className="page">
@@ -505,6 +526,7 @@ export default function Home() {
                   Reading the archive and classifying every file
                 </li>
                 <li className={progress.nearest ? "done" : ""}>Preparing what archive playback would give</li>
+                <li className={progress.datesOnly ? "done" : ""}>Preparing what capture dates alone would give</li>
               </ol>
             ) : (
               <button type="submit" className="btn btn-primary">
@@ -566,7 +588,7 @@ export default function Home() {
       ) : null}
 
       {/* ACT III */}
-      {phase === "autopsy" && strict && nearest && revealed ? (
+      {phase === "autopsy" && strict && nearest && datesOnly && revealed ? (
         <section className="act reveal" aria-labelledby="act3">
           <div className="act-mark">
             <span>III</span>
@@ -574,7 +596,27 @@ export default function Home() {
               The resurrection
             </h2>
           </div>
-          {agree ? (
+          {datesDiffer ? (
+            <>
+              <p className="finding">
+                Two methods, two different pages. Left: what a method that trusts capture dates alone
+                would restore. Right: what can be shown as it was on <strong>{strict.date}</strong>,
+                once the server&rsquo;s own dates are used as evidence.
+              </p>
+              <p className="fine">
+                Dates alone leave out {rescued} {rescued === 1 ? "file" : "files"} that the archive
+                saved after the day but that the server says were already there. The left page is not
+                fake. It is what that method can vouch for.
+              </p>
+              <Curtain
+                nearestUrl={`${datesOnly.urls.preview}?annotate=1`}
+                dayUrl={`${strict.urls.preview}?annotate=1`}
+                dayLabel={`With the server's own dates, as it was on ${strict.date}`}
+                leftLabel="Capture dates alone"
+                leftShort="Dates alone"
+              />
+            </>
+          ) : agree ? (
             <div className="agree">
               <p className="finding">
                 Archive playback and Revenant give the <strong>same page</strong> here, file for file.
@@ -617,7 +659,7 @@ export default function Home() {
       ) : null}
 
       {/* ACT IV */}
-      {phase === "autopsy" && strict && nearest && revealed ? (
+      {phase === "autopsy" && strict && nearest && datesOnly && revealed ? (
         <section className="act reveal" aria-labelledby="act4">
           <div className="act-mark">
             <span>IV</span>

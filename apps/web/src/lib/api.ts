@@ -86,7 +86,7 @@ export type Failure =
     }
   | { kind: "network" };
 
-export type PolicyName = "strict" | "include-anachronisms" | "nearest";
+export type PolicyName = "strict" | "include-anachronisms" | "nearest" | "dates-only";
 
 async function parseFailure(res: Response): Promise<Failure> {
   let body: unknown = null;
@@ -159,7 +159,7 @@ export async function createJob(
 export type LiveState =
   | { status: "running"; stage: string; requests: number; notes: string[] }
   | { status: "failed"; error: { code: string; message: string }; notes: string[] }
-  | { status: "done"; strict: Job; nearest: Job; notes: string[] };
+  | { status: "done"; strict: Job; nearest: Job; dates_only: Job; notes: string[] };
 
 export async function createLive(url: string, date: string, rights: boolean): Promise<{ id: string }> {
   let res: Response;

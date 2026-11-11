@@ -24,6 +24,7 @@ fn request(target: &str, include_anachronisms: bool) -> Request {
         target: parse_cdx_timestamp(target).expect("valid"),
         include_anachronisms,
         nearest: false,
+        dates_only: false,
     }
 }
 
@@ -403,6 +404,7 @@ fn mock_request() -> Request {
         target: parse_cdx_timestamp("20000601000000").unwrap(),
         include_anachronisms: false,
         nearest: false,
+        dates_only: false,
     }
 }
 
