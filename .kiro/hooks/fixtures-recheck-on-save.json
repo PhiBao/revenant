@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Re-run fixture and pipeline tests when fixtures change",
+      "trigger": "PostFileSave",
+      "description": "The fixture tests pin real archive data and a ZIP hash. When a capture index or blob manifest changes, find out at once which verdicts moved.",
+      "matcher": "fixtures/(snapshots|examples).*",
+      "action": {
+        "type": "command",
+        "command": "cargo test -p revenant-core --test fixture_y2k --test fixture_y2k_briefings --test pipeline --quiet 2>&1 | tail -8",
+        "timeout": 180
+      }
+    }
+  ]
+}

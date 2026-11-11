@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Remind the agent to amend the spec before changing behavior",
+      "trigger": "UserPromptSubmit",
+      "description": "Keeps the spec-first habit that this project's write-up depends on.",
+      "action": {
+        "type": "agent",
+        "prompt": "Project rule: when real data or a test contradicts a requirement, amend the requirement in .kiro/specs/<spec>/requirements.md first, then change the code, then record the dated change in KIRO_USAGE.md. Do not patch behavior without recording why."
+      }
+    }
+  ]
+}

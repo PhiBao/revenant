@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Run the quick checks when the agent stops",
+      "trigger": "Stop",
+      "description": "At the end of a turn, run format, clippy and all Rust tests so no turn ends with a broken workspace.",
+      "action": {
+        "type": "command",
+        "command": "bash scripts/verify.sh --quick 2>&1 | tail -15",
+        "timeout": 300
+      }
+    }
+  ]
+}

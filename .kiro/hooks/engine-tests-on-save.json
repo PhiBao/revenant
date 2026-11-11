@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Format and test the engine when Rust files change",
+      "trigger": "PostFileSave",
+      "description": "After saving a file in the core crate, format the workspace and run the core test suite, so a broken verdict rule shows up immediately.",
+      "matcher": "crates/revenant-core/.*\\.rs$",
+      "action": {
+        "type": "command",
+        "command": "cargo fmt --all && cargo test -p revenant-core --quiet 2>&1 | tail -8",
+        "timeout": 180
+      }
+    }
+  ]
+}
