@@ -63,3 +63,11 @@ Why: the date field is blind, and the commonest live failure is a date before th
 - W8.5 WHEN the answer has no months THEN the page SHALL say the archive holds no capture of that address, and SHALL NOT call it a failure. WHEN the archive cannot be asked THEN the page SHALL say that is not the same as nothing being there (E-rule UNKNOWN).
 - W8.6 WHEN the chosen date is before the first capture THEN the page SHALL say so before the run starts.
 - W8.7 Every month button SHALL have an accessible name with the month and year, and the strip SHALL work with the keyboard alone (W5.3).
+
+## W9 Cold start (added Nov 12, 2026)
+
+Why: on Fly.io the machine stops when idle. Recording the demo against the deployed app caught the first visit after a stop showing "Revenant could not reach its own server", because the first `/api/examples` call landed while the machine was still passing its health check (the log shows the check failing for about a second after each start).
+
+- W9.1 A read request (listing the examples, polling a live run) SHALL be retried when the network fails or the answer is 502, 503 or 504, up to four attempts with growing waits (about 0.8 s, 1.6 s, 3.2 s). It SHALL NOT be retried on any other status, because a 4xx or 5xx from the application is an answer.
+- W9.2 While the retries run, the page SHALL keep showing its loading text, not an error. Only when every attempt fails SHALL it show the unreachable message with the retry button.
+- W9.3 A request that creates something (starting a run, a timeline lookup) SHALL NOT be retried automatically. Repeating it could start two runs and use two of the archive's rate-limit slots. The unreachable message with a retry button is the right answer there.

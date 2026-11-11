@@ -108,10 +108,27 @@ async function parseFailure(res: Response): Promise<Failure> {
   };
 }
 
+/** Waits between attempts of a read request while a stopped server wakes up (W9.1). */
+const RETRY_WAITS_MS = [800, 1600, 3200];
+
+/** GET with retries on a network failure or 502/503/504. Never use for requests that create things (W9.3). */
+async function getWithRetry(url: string): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const last = attempt >= RETRY_WAITS_MS.length;
+    try {
+      const res = await fetch(url);
+      if (![502, 503, 504].includes(res.status) || last) return res;
+    } catch (e) {
+      if (last) throw e;
+    }
+    await new Promise((r) => setTimeout(r, RETRY_WAITS_MS[attempt]));
+  }
+}
+
 export async function listExamples(): Promise<Example[]> {
   let res: Response;
   try {
-    res = await fetch("/api/examples");
+    res = await getWithRetry("/api/examples");
   } catch {
     throw { kind: "network" } satisfies Failure;
   }
@@ -162,7 +179,7 @@ export async function createLive(url: string, date: string, rights: boolean): Pr
 export async function getLive(id: string): Promise<LiveState> {
   let res: Response;
   try {
-    res = await fetch(`/api/live/${id}`);
+    res = await getWithRetry(`/api/live/${id}`);
   } catch {
     throw { kind: "network" } satisfies Failure;
   }
