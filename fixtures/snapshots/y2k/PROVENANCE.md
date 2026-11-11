@@ -17,3 +17,7 @@ Open item before any video or public use: confirm that no page in the fixture em
 
 ## Reproducing
 The query and filter are in `captures.tsv`'s source rows. Re-run the CDX query above with `url=y2k.gov/` and `url=y2k.gov/gif/<name>.gif`. Expect the counts to grow over time as the archive adds captures, so the test pins this snapshot's timestamps rather than the counts.
+
+## briefings fixture
+Captured 2026-11-11 from the CDX API: labels are the page and its 11 local references. Source rows keep all statuses. Only the 200 rows are used by the engine.
+No blob bodies are stored yet, so the ZIP packaging step will need them.

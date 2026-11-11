@@ -38,3 +38,18 @@ External links on the page (`currents.net`, `ky3.com`, `latimes.com`) were not f
 1. Use y2k.gov as the seeded fixture for the demo.
 2. Add a fifth verdict, `UNCERTAIN`, for the case where the latest capture at or before T and the earliest capture after T have different digests. The four verdicts in PLAN.md §R.3 cannot represent this case. This is a spec amendment, to be logged in KIRO_USAGE.md.
 3. The M1 go/no-go is GO. The demo's evidence is the uncertain root and the missing images, both from the archive index. The earlier claim of a real anachronism on the GIFs is withdrawn.
+
+## Demo candidate: briefings.html (captured 2000-03-01 and 2000-03-04)
+
+Fixture: `fixtures/snapshots/y2k-briefings/captures.tsv`. Test: `crates/revenant-core/tests/fixture_y2k_briefings.rs`. Target: **2000-03-02**.
+
+| File | HTTP 200 captures | Verdict at 2000-03-02 |
+|---|---|---|
+| briefings.html | 2 (Mar 1 and Mar 4, different digests) | UNCERTAIN |
+| images/1, 3, 4, 5, 6, 7 .gif | 1 each (all archived Mar 4) | ANACHRONISM, +2 days |
+| images/8, 9 .gif | 0 (404 only) | MISSING |
+| 2_briefings.gif, briefings_title1/2.gif | 0 (no rows) | MISSING |
+
+Autopsy at this date: Completeness 7 of 12 files (58.3%, counting the anachronisms as recovered). Fidelity 0 of 7.
+
+Why this date: it shows all three verdicts for one page. The two-day gap is real, and it is the kind of difference the fidelity model exists to surface.
