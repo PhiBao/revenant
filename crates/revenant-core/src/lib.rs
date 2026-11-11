@@ -3,6 +3,7 @@
 //! This crate has no network or framework code. Archive access sits behind a
 //! later `SnapshotSource` trait. See `.kiro/specs/revenant-core-engine/`.
 
+pub mod autopsy;
 pub mod fidelity;
 pub mod index;
 pub mod time;

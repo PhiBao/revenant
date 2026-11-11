@@ -7,3 +7,4 @@
 - [x] T5 Real-data unit tests from docs/spike/m1-y2k.md: the 1999 root gives UNCERTAIN, and award.gif gives ANACHRONISM.
 - [x] T6 Fixture-driven test: load `fixtures/snapshots/y2k/` and assert the verdicts above. Needs the fixture from the next task.
 - [x] T7 Capture the fixture from the archive with PROVENANCE.md.
+- [x] T8 Autopsy: Completeness and Fidelity over a page's referenced files, with a per-file ledger (`src/autopsy.rs`, 3 unit tests). Definitions from PLAN.md §R.3.
