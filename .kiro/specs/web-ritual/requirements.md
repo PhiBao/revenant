@@ -81,3 +81,5 @@ Source: engine requirement R10. Amends W6.3, W6.4 and W6.5.
 - W10.3 WHEN they do not differ THEN the comparison view SHALL NOT be shown (W6.4 stands for this case), and the page SHALL say the server's dates changed nothing here.
 - W10.4 The nearest restore SHALL still be used for the statement "archive playback and Revenant give the same page" (W6.4), and no longer for the curtain.
 - W10.5 The caption SHALL NOT call the left side wrong or fake. It SHALL say what a method that trusts capture dates alone leaves out.
+
+- W10.6 (added Nov 12, 2026) WHEN the comparison view first becomes at least 60% visible THEN the divider SHALL sweep once, from the middle to the left-hand page, across to the right-hand page, and back to the middle, in about five seconds, so a first-time visitor sees what the control does. The sweep SHALL NOT run when `prefers-reduced-motion` is set (W5.2), SHALL stop at once when the visitor touches the slider or a toggle button, and SHALL run only once per comparison view. Why: recording the demo showed the slider cannot be dragged by scripted input, and a visitor who does not notice the slider sees only a half-covered page.

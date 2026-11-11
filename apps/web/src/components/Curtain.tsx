@@ -1,6 +1,15 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+
+/** Divider positions the intro sweep passes through, with the seconds each leg takes (W10.6). */
+const SWEEP: [number, number][] = [
+  [100, 1.2],
+  [100, 0.6],
+  [0, 2.0],
+  [0, 0.6],
+  [50, 1.0],
+];
 
 interface Props {
   /** The "before" restore, drawn on the left of the divider. */
@@ -27,9 +36,58 @@ export function Curtain({
 }: Props) {
   const [pos, setPos] = useState(50);
   const id = useId();
+  const figure = useRef<HTMLElement>(null);
+  const stop = useRef(false);
+
+  // One intro sweep when the view is first mostly visible, unless motion is reduced (W10.6).
+  useEffect(() => {
+    const el = figure.current;
+    if (!el || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let frame = 0;
+    let ran = false;
+    const run = () => {
+      let from = 50;
+      let leg = 0;
+      let legStart = performance.now();
+      const step = (now: number) => {
+        if (stop.current) return;
+        const [to, secs] = SWEEP[leg]!;
+        const t = Math.min(1, (now - legStart) / (secs * 1000));
+        const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        setPos(Math.round(from + (to - from) * eased));
+        if (t >= 1) {
+          from = to;
+          leg += 1;
+          legStart = now;
+          if (leg >= SWEEP.length) return;
+        }
+        frame = requestAnimationFrame(step);
+      };
+      frame = requestAnimationFrame(step);
+    };
+    const seen = new IntersectionObserver(
+      (entries) => {
+        if (!ran && entries.some((e) => e.isIntersecting)) {
+          ran = true;
+          seen.disconnect();
+          run();
+        }
+      },
+      { threshold: 0.6 },
+    );
+    seen.observe(el);
+    return () => {
+      seen.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  const touch = () => {
+    stop.current = true;
+  };
 
   return (
-    <figure className="curtain">
+    <figure className="curtain" ref={figure}>
       <div className="curtain-labels" aria-hidden="true">
         <span>{leftLabel}</span>
         <span>{dayLabel}</span>
@@ -63,14 +121,25 @@ export function Curtain({
           min={0}
           max={100}
           value={pos}
-          onChange={(e) => setPos(Number(e.target.value))}
+          onPointerDown={touch}
+          onKeyDown={touch}
+          onChange={(e) => {
+            touch();
+            setPos(Number(e.target.value));
+          }}
           aria-valuetext={`${pos} percent of the left side shown`}
         />
         <div className="curtain-toggle" role="group" aria-label="Choose a restoration">
-          <button type="button" aria-pressed={pos === 100} onClick={() => setPos(100)}>
+          <button type="button" aria-pressed={pos === 100} onClick={() => {
+              touch();
+              setPos(100);
+            }}>
             {leftShort}
           </button>
-          <button type="button" aria-pressed={pos === 0} onClick={() => setPos(0)}>
+          <button type="button" aria-pressed={pos === 0} onClick={() => {
+              touch();
+              setPos(0);
+            }}>
             As it was
           </button>
         </div>
