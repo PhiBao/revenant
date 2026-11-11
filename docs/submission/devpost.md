@@ -74,7 +74,7 @@ Built entirely in **Kiro CLI 3.2.0** (no IDE, Web or Crew). The full write-up, w
 
 ## Pre-existing code or work
 
-None. The repository was created on 2026-11-11, inside the submission period. Dependencies are listed in `Cargo.toml` and `apps/web/package.json`; the README has a "Dependencies" section. Fonts (Fraunces, IBM Plex Mono) are open-licensed packages.
+None. The repository was created on 2026-11-11, inside the submission period. Dependencies are listed in `Cargo.toml` and `apps/web/package.json`. Fonts (Fraunces, IBM Plex Mono) are open-licensed packages.
 
 ## Bonus prizes
 
