@@ -16,7 +16,11 @@ use revenant_core::time::parse_cdx_timestamp;
 
 pub const MAX_URL_BYTES: usize = 2048;
 pub const MAX_BODY_BYTES: u64 = 4 * 1024 * 1024;
-pub const MAX_LIVE_ASSETS: usize = 40;
+/// The most months a timeline shows (T1.2). The archive began in 1996, so 600 months reach 2046.
+pub const MAX_TIMELINE_MONTHS: usize = 600;
+/// How many captures the first index answer asks for (L6.1).
+pub const CLOSEST_ROWS: usize = 6;
+pub const MAX_LIVE_ASSETS: usize = 80;
 pub const MAX_LIVE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const USER_AGENT: &str =
     "Revenant/0.1 (+https://github.com/PhiBao/revenant; polite single-file restorer)";
@@ -152,6 +156,18 @@ fn validate_host(host: &str) -> Result<(), UrlError> {
         ));
     }
     Ok(())
+}
+
+impl LiveTarget {
+    /// The label the pipeline and the index use for this page: `y2k.gov/briefings.html`, or
+    /// `y2k.gov/` for a site root.
+    pub fn label(&self) -> String {
+        if self.page.is_empty() {
+            format!("{}/", self.site)
+        } else {
+            format!("{}/{}", self.site, self.page)
+        }
+    }
 }
 
 // ---------------------------------------------------------------- archive client (L3)
@@ -330,6 +346,18 @@ impl ArchiveClient {
         parse_cdx(&body)
     }
 
+    /// One question: the first capture in each calendar month (T1.2). Asks for one row more than the
+    /// cap, so a full answer means there are more months than are shown.
+    pub fn timeline(&self, key: &str) -> Result<Vec<CdxRow>, Unavailable> {
+        let q = format!(
+            "/cdx/search/cdx?url={}&output=json&fl=original,timestamp,digest&filter=statuscode:200&collapse=timestamp:6&limit={}",
+            encode_component(key),
+            MAX_TIMELINE_MONTHS + 1
+        );
+        let body = self.get(&q, 4 * 1024 * 1024)?;
+        parse_cdx(&body)
+    }
+
     fn replay(&self, timestamp: &str, original: &str) -> Result<Fetched, Unavailable> {
         // The original comes from the archive's own index, never from the visitor.
         self.get_with_origin_date(&format!("/web/{timestamp}id_/{original}"), MAX_BODY_BYTES)
@@ -433,31 +461,41 @@ impl LiveSource {
 
     fn query(&self, label: &str) -> Lookup {
         self.note(format!("Asking the archive about {label}"));
-        let before_window = format!(
-            "to={}",
-            revenant_core::time::format_cdx_timestamp(self.target_ts)
-        );
-        let after_window = format!(
-            "from={}",
-            revenant_core::time::format_cdx_timestamp(self.target_ts + 1)
-        );
-        let before = match self.client.cdx(label, &before_window, "-1") {
-            Ok(r) => r,
-            Err(e) => return Lookup::Unknown(e.0),
-        };
-        let after = match self.client.cdx(label, &after_window, "1") {
+        let target = revenant_core::time::format_cdx_timestamp(self.target_ts);
+        let after_start = revenant_core::time::format_cdx_timestamp(self.target_ts + 1);
+
+        // One question, nearest first (L6.1).
+        let window = format!("sort=closest&closest={target}");
+        let mut rows = match self.client.cdx(label, &window, &CLOSEST_ROWS.to_string()) {
             Ok(r) => r,
             Err(e) => return Lookup::Unknown(e.0),
         };
 
+        // The nearest rows can all fall on one side while a capture exists on the other. Ask for
+        // the missing side only when the answer was full, since a short answer is everything the
+        // index has (L6.2, L6.3).
+        let (need_before, need_after) = follow_up_needed(&rows, self.target_ts);
+        if need_before {
+            match self.client.cdx(label, &format!("to={target}"), "-1") {
+                Ok(more) => rows.extend(more),
+                Err(e) => return Lookup::Unknown(e.0),
+            }
+        }
+        if need_after {
+            match self.client.cdx(label, &format!("from={after_start}"), "1") {
+                Ok(more) => rows.extend(more),
+                Err(e) => return Lookup::Unknown(e.0),
+            }
+        }
+
         let mut caps: Vec<Capture> = Vec::new();
         let mut originals = self.originals.lock().expect("originals lock");
-        for row in before.into_iter().chain(after) {
+        for row in rows {
             let Some(ts) = parse_cdx_timestamp(&row.timestamp) else {
                 continue;
             };
             if caps.iter().any(|c| c.ts == ts) {
-                continue;
+                continue; // L6.5
             }
             originals.insert(
                 (label.to_string(), ts),
@@ -467,6 +505,23 @@ impl LiveSource {
         }
         Lookup::Captures(caps)
     }
+}
+
+/// Whether the nearest-first answer is missing a side that may exist (L6.2).
+///
+/// Returns `(ask_for_an_earlier_one, ask_for_a_later_one)`. A side is only worth asking about
+/// when the answer was full: fewer rows than requested means the index told us everything.
+pub fn follow_up_needed(rows: &[CdxRow], target: i64) -> (bool, bool) {
+    if rows.len() < CLOSEST_ROWS {
+        return (false, false);
+    }
+    let times: Vec<i64> = rows
+        .iter()
+        .filter_map(|r| parse_cdx_timestamp(&r.timestamp))
+        .collect();
+    let has_before = times.iter().any(|t| *t <= target);
+    let has_after = times.iter().any(|t| *t > target);
+    (!has_before, !has_after)
 }
 
 impl SnapshotSource for LiveSource {
@@ -613,6 +668,55 @@ mod tests {
         bad(&format!("http://example.org/{}", "a".repeat(2100)));
         bad(&format!("http://{}.org/", "a".repeat(260)));
         bad(&format!("http://{}.example.org/", "a".repeat(64)));
+    }
+
+    fn row(ts: &str) -> CdxRow {
+        CdxRow {
+            original: "http://x/".into(),
+            timestamp: ts.into(),
+            digest: "D".into(),
+        }
+    }
+
+    #[test]
+    fn a_short_answer_is_everything_the_index_has() {
+        let t = parse_cdx_timestamp("20000302235959").unwrap();
+        // Five rows, all before the target: asked for six, so nothing more exists.
+        let rows: Vec<CdxRow> = (1..=5).map(|d| row(&format!("2000030{d}000000"))).collect();
+        assert_eq!(follow_up_needed(&rows, t), (false, false));
+        assert_eq!(follow_up_needed(&[], t), (false, false));
+    }
+
+    #[test]
+    fn a_full_answer_on_one_side_asks_for_the_other() {
+        let t = parse_cdx_timestamp("20000302235959").unwrap();
+        let after: Vec<CdxRow> = (0..6).map(|h| row(&format!("200003030{h}0000"))).collect();
+        assert_eq!(
+            follow_up_needed(&after, t),
+            (true, false),
+            "all after: ask for an earlier one"
+        );
+        let before: Vec<CdxRow> = (0..6).map(|h| row(&format!("200003020{h}0000"))).collect();
+        assert_eq!(
+            follow_up_needed(&before, t),
+            (false, true),
+            "all before: ask for a later one"
+        );
+    }
+
+    #[test]
+    fn a_full_answer_with_both_sides_needs_nothing() {
+        let t = parse_cdx_timestamp("20000302235959").unwrap();
+        let mut rows: Vec<CdxRow> = (0..5).map(|h| row(&format!("200003020{h}0000"))).collect();
+        rows.push(row("20000304041110"));
+        assert_eq!(follow_up_needed(&rows, t), (false, false));
+    }
+
+    #[test]
+    fn unparseable_rows_do_not_count_as_a_side() {
+        let t = parse_cdx_timestamp("20000302235959").unwrap();
+        let rows: Vec<CdxRow> = (0..6).map(|_| row("garbage")).collect();
+        assert_eq!(follow_up_needed(&rows, t), (true, true));
     }
 
     #[test]

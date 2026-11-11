@@ -40,3 +40,12 @@ Source: engine requirements R6 and R7.
 - W6.5 WHEN the two restores differ THEN the comparison view SHALL be shown, with the labels "What archive playback gives" and "What can be shown as it was on <date>".
 - W6.7 A ledger line SHALL start with a capital letter, SHALL NOT repeat itself, and SHALL NOT contain implementation detail (hashing, rewriting). Detail that belongs to the certificate as a whole SHALL be in its notes.
 - W6.6 The target time SHALL be described as "the end of <date>, UTC" wherever the date is shown with a result, because a page can change during the day.
+
+## W7 Honest waiting (added Nov 12, 2026)
+
+Why: a real 55-file page took 201 seconds live, and the form said "about a minute". A wait that is longer than promised reads as a hang.
+
+- W7.1 The live option SHALL say that a restore takes from under a minute for a small page to a few minutes for a large one, and why (the archive is asked one question at a time, on purpose).
+- W7.2 WHILE a live run is in progress THEN the page SHALL show what it is doing now, the number of questions asked, and the elapsed time, and SHALL update at least every two seconds.
+- W7.3 The page SHALL NOT show a percentage or a time-left estimate, because the number of files is not known until the page has been read.
+- W7.4 WHEN a live run has taken longer than 90 seconds THEN the page SHALL say the page is a large one, and that leaving it open is fine.

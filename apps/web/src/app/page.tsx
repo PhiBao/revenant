@@ -326,7 +326,7 @@ export default function Home() {
                 onClick={() => setSource("live")}
               >
                 A page of your own
-                <span>Asks the archive live. About a minute.</span>
+                <span>Asks the archive live. Under a minute to a few.</span>
               </button>
             </div>
 
@@ -441,6 +441,12 @@ export default function Home() {
                   {liveRequests} {liveRequests === 1 ? "question" : "questions"} asked · {elapsed}s ·
                   one at a time, on purpose, so the archive stays polite
                 </p>
+                {elapsed > 90 ? (
+                  <p className="fine">
+                    This is a large page. A page with dozens of files takes a few minutes. You can
+                    leave this tab open.
+                  </p>
+                ) : null}
               </div>
             ) : busy ? (
               <ol className="progress" aria-live="polite">

@@ -76,10 +76,18 @@ proptest! {
         if !swallowed {
             prop_assert!(!text.contains("web.archive.org"), "{text}");
         }
-        let lower = text.to_ascii_lowercase();
-        // `expression(` and `behavior:` can survive only inside a comment or a string.
+        // `expression(` and `behavior:` can survive only inside a comment or a string, or as the
+        // tail of a longer identifier (`aexpression(` is not the construct, R9.5). So look for
+        // them at a word boundary.
         if !swallowed {
-            prop_assert!(!lower.contains("expression(") && !lower.contains("behavior:"), "{text}");
+            let lower = text.to_ascii_lowercase();
+            let at_boundary = |needle: &str| {
+                lower.match_indices(needle).any(|(i, _)| {
+                    i == 0 || !lower.as_bytes()[i - 1].is_ascii_alphanumeric() && lower.as_bytes()[i - 1] != b'-' && lower.as_bytes()[i - 1] != b'_'
+                })
+            };
+            prop_assert!(!at_boundary("expression("), "{text}");
+            prop_assert!(!at_boundary("behavior:"), "{text}");
         }
     }
 

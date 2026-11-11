@@ -64,3 +64,32 @@ Source: engine requirements R6 and R7.
 - E3.1 `GET /p/{id}/?annotate=1` SHALL serve the annotated page (R8). Without the parameter the page SHALL be served exactly as it is in the ZIP.
 - E3.2 The parameter SHALL have no effect on any file other than the page, on the ZIP, or on the certificate.
 - E3.3 The annotated page SHALL carry the same security headers as any other preview.
+
+## L6 One index query per file (added Nov 12, 2026)
+
+Why: `sort=closest&closest=T&limit=N` returns captures ordered by distance from T in one request, where live mode made two (last at or before T, first after T). Page after page of real archive traffic is index questions, so halving them shortens every live run.
+
+- L6.1 A live lookup SHALL ask the index once per file, ordered by closeness to the target time, for up to 6 HTTP 200 captures.
+- L6.2 WHEN the answer holds captures on one side of T only THEN the source SHALL ask once more for the nearest capture on the missing side, because the nearest six can all be on one side while a capture exists on the other. It SHALL NOT ask again when the first answer holds fewer than 6 rows, since then the index has told us everything it has.
+- L6.3 The follow-up SHALL be bounded the same way as before: `limit=-1` with `to=T` for the missing earlier side, `limit=1` with `from=T+1` for the missing later side.
+- L6.4 The classification given by the one-query path SHALL equal the classification given by the two-query path for every sequence of captures. (Verified by test against the fake archive.)
+- L6.5 Rows SHALL be de-duplicated by capture time.
+
+- L6.6 (amends L3.2) With one index query per file a live run costs about half the archive requests, so the cap rises from 40 to 80 files. The byte caps are unchanged (8 MiB per run, 4 MiB per body). A page above the cap SHALL still be refused with `too_many_assets`, naming the count.
+
+## T Timeline (added Nov 12, 2026)
+
+Why: the date field is blind. A visitor cannot tell which days the archive covers, and the most common live failure is a date before the first capture. One index question can show the page's whole version history.
+
+- T1.1 `POST /api/timeline` with `url` SHALL answer with the page's versions: for each point where the archive's digest for the page changed, the time of the first capture with that digest, and the total number of captures seen. It SHALL use the same address validation as live runs (L1.3) and SHALL NOT require the rights box, since it restores nothing.
+- T1.2 The system SHALL ask the archive exactly one question, HTTP 200 captures only, one row per run of the same digest, capped at 400 versions. It SHALL answer `truncated: true` when the cap is hit.
+- T1.3 (amended Nov 12, 2026) The timeline SHALL use the same archive pacing as live runs, so it can never make the archive see more traffic. It SHALL have its own, more generous rate limit (20 per 10 minutes per client), because one lookup is one archive request. It SHALL NOT take a live-run slot.
+- T1.4 (amended Nov 12, 2026) The answer SHALL include the time of the first capture. It SHALL NOT claim a last-capture time: collapsing runs of the same digest returns the first capture of each run, so the final row is when the last version began, not when the archive last saw the page. The answer SHALL call that row `latest_version_from`.
+- T1.5 The system SHALL NOT claim that content changed between two versions with different digests. It SHALL call them "versions the archive saw", because digests differ for reasons other than content (R4).
+- T1.6 WHEN the archive cannot be asked THEN the answer SHALL be `archive_unavailable`. WHEN the archive has no 200 captures THEN the answer SHALL be an empty list with `versions: []`, not an error.
+
+Amendment (Nov 12, 2026, after trying it on the real archive). With `collapse=digest` and a cap of 400, a page crawled constantly (fema.gov) returned its first 400 versions, ending in 2005, for a page the archive covers through 2026. The strip would have looked as if the page stopped existing. A date aid must show where the archive has coverage before it shows how the page changed.
+
+- T1.2 (replaced) The system SHALL ask the archive exactly one question, HTTP 200 captures only, collapsed to one row per calendar month (`collapse=timestamp:6`). A month's row is its first capture in that month. This bounds the answer by the number of months the archive has covered (324 for a page since 1996), whatever the crawl rate, so the whole history is always shown. `truncated` SHALL stay in the answer but SHALL be true only when the answer would exceed 600 months.
+- T1.5 (amended) The answer SHALL NOT claim anything about content. A month's row says the archive holds at least one capture in that month, and carries the digest of that first capture. Two months with different digests are "different versions the archive saw", not proof that the page changed (R4).
+- T1.7 The answer SHALL include `latest_month`: the last month that holds a capture. Unlike the earlier `latest_version_from` it is true of the whole history.

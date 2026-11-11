@@ -37,6 +37,9 @@ struct Behavior {
     no_origin_header: bool,
     /// Send a Last-Modified header that is not a valid HTTP date (E2.3).
     bad_origin_header: bool,
+    /// Give the page this many extra captures, one an hour, starting at midnight on this date
+    /// (YYYYMMDD). Used to crowd the nearest rows onto one side of the target (L6.2).
+    crowd_page_after: Option<(&'static str, u32)>,
 }
 
 struct Row {
@@ -97,6 +100,26 @@ fn load_fake(behavior: Behavior) -> Arc<Fake> {
             std::fs::read(dir.join("blobs").join(c[3])).unwrap(),
         );
     }
+    let mut rows: Vec<Row> = rows;
+    if let Some((from_day, count)) = behavior.crowd_page_after {
+        // One extra capture a day for the page, each with a distinct digest and no stored body.
+        // Hourly, so a dozen of them sit closer to the target than the real earlier copy does.
+        let start = revenant_core::time::parse_cdx_timestamp(&format!("{from_day}000000")).unwrap();
+        for i in 1..=count as i64 {
+            let ts = revenant_core::time::format_cdx_timestamp(start + i * 3_600);
+            rows.push(Row {
+                label: "y2k.gov/briefings.html".into(),
+                ts: ts.clone(),
+                digest: format!("CROWD{i:03}"),
+                status: "200".into(),
+                original: "http://www.y2k.gov:80/briefings.html".into(),
+            });
+            blobs.insert(
+                ("y2k.gov/briefings.html".to_string(), ts),
+                format!("<html><body><p>crowd copy {i}</p></body></html>").into_bytes(),
+            );
+        }
+    }
     Arc::new(Fake {
         rows,
         blobs,
@@ -106,6 +129,12 @@ fn load_fake(behavior: Behavior) -> Arc<Fake> {
         cdx_calls: AtomicU32::new(0),
         replay_calls: AtomicU32::new(0),
     })
+}
+
+/// Seconds between two 14-digit CDX timestamps, always positive.
+fn distance(a: &str, b: &str) -> i64 {
+    let secs = |t: &str| revenant_core::time::parse_cdx_timestamp(t).unwrap_or(0);
+    (secs(a) - secs(b)).abs()
 }
 
 async fn fake_cdx(
@@ -143,6 +172,30 @@ async fn fake_cdx(
         })
         .collect();
     hits.sort_by(|a, b| a.ts.cmp(&b.ts));
+    // collapse=timestamp:6 keeps the first row of each calendar month; collapse=digest keeps the
+    // first row of each run of the same digest (T1.2).
+    if q.get("collapse").map(String::as_str) == Some("timestamp:6") {
+        let mut last: Option<String> = None;
+        hits.retain(|r| {
+            let month = r.ts[..6].to_string();
+            let keep = last.as_ref() != Some(&month);
+            last = Some(month);
+            keep
+        });
+    }
+    if q.get("collapse").map(String::as_str) == Some("digest") {
+        let mut last: Option<&str> = None;
+        hits.retain(|r| {
+            let keep = last != Some(r.digest.as_str());
+            last = Some(r.digest.as_str());
+            keep
+        });
+    }
+    // sort=closest orders by distance from `closest`, nearest first, ties to the earlier (L6.1).
+    if q.get("sort").map(String::as_str) == Some("closest") {
+        let target = q.get("closest").cloned().unwrap_or_default();
+        hits.sort_by_key(|r| (distance(&r.ts, &target), r.ts.clone()));
+    }
     let limit: i64 = q.get("limit").and_then(|l| l.parse().ok()).unwrap_or(0);
     let hits: Vec<&Row> = match limit {
         l if l < 0 => hits
@@ -443,8 +496,8 @@ async fn one_run_costs_the_archive_one_set_of_requests() {
     let app = app_for(config(&base));
     let id = start(&app, good(PAGE, "2000-03-02")).await;
     assert_eq!(finish(&app, &id).await["status"], "done");
-    // The page and its 11 assets each need a "before" and an "after" query, once.
-    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 2 * (1 + 11));
+    // The page and its 11 assets each need one index question, once (L6.1).
+    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 1 + 11);
     // The page body once, plus the six images the nearest restore includes.
     assert_eq!(fake.replay_calls.load(Ordering::SeqCst), 1 + 6);
 }
@@ -488,7 +541,7 @@ async fn a_rate_limited_archive_is_retried_once() {
     let id = start(&app, good(PAGE, "2000-03-02")).await;
     assert_eq!(finish(&app, &id).await["status"], "done");
     // One extra request for the retry.
-    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 2 * (1 + 11) + 1);
+    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), (1 + 11) + 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -698,4 +751,232 @@ async fn asking_for_the_server_date_costs_no_extra_archive_request() {
         with_header.replay_calls.load(Ordering::SeqCst),
         without.replay_calls.load(Ordering::SeqCst)
     );
+}
+
+// ------------------------------------------------------------------ L6: one index query per file
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_costs_one_index_question_when_the_answer_has_both_sides() {
+    let (_, fake) = run_with(Behavior::default()).await;
+    // 12 files (the page and 11 assets), one question each. None of them has six captures, so no
+    // follow-up is needed. This was 24 before L6.
+    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 12);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_verdicts_are_the_same_as_with_two_questions_per_file() {
+    let (v, _) = run_with(Behavior::default()).await;
+    let strict = &v["strict"]["certificate"];
+    // These are the numbers the two-question implementation gave (and the real archive gives).
+    assert_eq!(strict["files"][0]["verdict"], "ATTESTED");
+    assert_eq!(strict["vitals"]["completeness_percent"], 58.3);
+    assert_eq!(strict["vitals"]["fidelity_percent"], 100.0);
+}
+
+/// The reason for the follow-up. 30 daily captures of the page after the target crowd the six
+/// nearest rows onto the later side. Without a follow-up, the capture before the target would
+/// never be seen, and the page would be judged as if nothing earlier existed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_crawled_daily_after_the_date_still_finds_the_capture_before_it() {
+    let (v, fake) = run_with(Behavior {
+        // Target is the end of 2000-03-02. The real captures are Mar 1 (A) and Mar 4 (B). Thirty
+        // hourly ones start at midnight on Mar 3, so the six nearest to the target are all
+        // later, and copy A (the only earlier one, 38 hours before) falls outside the six.
+        crowd_page_after: Some(("20000303", 30)),
+        ..Behavior::default()
+    })
+    .await;
+    let page = &v["strict"]["certificate"]["files"][0];
+    // The Mar 1 copy is before the target. If the follow-up were missing the page would have no
+    // earlier capture, and its dates-only verdict would be an anachronism instead.
+    assert_ne!(page["verdict_from_dates_only"], "ANACHRONISM", "{page}");
+    assert_eq!(page["verdict_from_dates_only"], "UNCERTAIN");
+    // One extra question was needed, for the page only: 12 + 1.
+    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 13);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_short_answer_is_never_followed_up() {
+    // Five captures of the page, all after the target, is a full account of what exists.
+    let (_, fake) = run_with(Behavior {
+        crowd_page_after: Some(("20000303", 2)),
+        ..Behavior::default()
+    })
+    .await;
+    // The page now has 4 rows (the 2 real ones plus 2). Fewer than 6, so no follow-up.
+    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 12);
+}
+
+// ------------------------------------------------------------------ T: the timeline
+
+fn post_timeline(body: Value) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/api/timeline")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_timeline_lists_the_months_the_archive_covers_with_one_question() {
+    let (base, fake) = spawn_fake(Behavior::default()).await;
+    let app = app_for(config(&base));
+    let (status, _, bytes) = call(&app, post_timeline(json!({ "url": PAGE }))).await;
+    assert_eq!(status, StatusCode::OK);
+    let v = as_json(&bytes);
+    assert_eq!(v["label"], "y2k.gov/briefings.html");
+    // Both real captures are in March 2000, so one month holds them (T1.2).
+    assert_eq!(v["month_count"], 1);
+    assert_eq!(v["months"][0]["month"], "200003");
+    assert_eq!(v["months"][0]["first_capture"], "20000301091452");
+    assert_eq!(v["first_capture"], "20000301091452");
+    assert_eq!(v["latest_month"], "200003");
+    assert_eq!(v["truncated"], false);
+    assert_eq!(
+        fake.cdx_calls.load(Ordering::SeqCst),
+        1,
+        "exactly one question"
+    );
+    assert_eq!(
+        fake.replay_calls.load(Ordering::SeqCst),
+        0,
+        "no page was downloaded"
+    );
+}
+
+/// The flaw found on the real archive: a busy page must not look as if it stopped existing.
+/// 30 hourly captures a day apart across several months must still reach the last month.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_busy_page_still_shows_the_whole_history_through_its_last_month() {
+    let (base, _) = spawn_fake(Behavior {
+        // 200 hourly captures from 2000-03-03: about 8 days, so a digest-collapsed list would be
+        // long. Months collapse them to the two that exist.
+        crowd_page_after: Some(("20000303", 200)),
+        ..Behavior::default()
+    })
+    .await;
+    let app = app_for(config(&base));
+    let (_, _, bytes) = call(&app, post_timeline(json!({ "url": PAGE }))).await;
+    let v = as_json(&bytes);
+    assert_eq!(v["month_count"], 1, "{v}");
+    assert_eq!(v["latest_month"], "200003");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_timeline_makes_no_claim_about_content_or_a_last_capture() {
+    let (base, _) = spawn_fake(Behavior::default()).await;
+    let app = app_for(config(&base));
+    let (_, _, bytes) = call(&app, post_timeline(json!({ "url": PAGE }))).await;
+    let v = as_json(&bytes);
+    assert!(v.get("last_capture").is_none(), "{v}");
+    assert!(v.get("latest_version_from").is_none(), "{v}");
+    assert!(v.get("latest_month").is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_the_archive_has_never_seen_is_an_empty_list_not_an_error() {
+    let (base, _) = spawn_fake(Behavior::default()).await;
+    let app = app_for(config(&base));
+    let (status, _, bytes) = call(
+        &app,
+        post_timeline(json!({ "url": "http://nothing.example.org/page.html" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v = as_json(&bytes);
+    assert_eq!(v["months"], json!([]));
+    assert_eq!(v["month_count"], 0);
+    assert!(v["first_capture"].is_null());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_archive_failure_is_not_an_empty_timeline() {
+    let (base, _) = spawn_fake(Behavior {
+        cdx_status: Some(500),
+        ..Behavior::default()
+    })
+    .await;
+    let app = app_for(config(&base));
+    let (status, _, bytes) = call(&app, post_timeline(json!({ "url": PAGE }))).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(as_json(&bytes)["error"]["code"], "archive_unavailable");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_timeline_uses_the_same_address_rules_but_not_the_rights_box() {
+    let (base, fake) = spawn_fake(Behavior::default()).await;
+    let app = app_for(Config {
+        timeline_rate_limit: 100,
+        ..config(&base)
+    });
+    for url in [
+        "http://127.0.0.1/",
+        "http://0x7f.0x1/",
+        "file:///etc/passwd",
+        "http://localhost/x",
+    ] {
+        let (status, _, bytes) = call(&app, post_timeline(json!({ "url": url }))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{url}");
+        assert_eq!(as_json(&bytes)["error"]["code"], "bad_url", "{url}");
+    }
+    assert_eq!(fake.cdx_calls.load(Ordering::SeqCst), 0);
+    // No `rights` field is accepted or required: it restores nothing.
+    let (status, _, _) = call(&app, post_timeline(json!({ "url": PAGE, "rights": true }))).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unknown fields are refused"
+    );
+    let (status, _, _) = call(&app, post_timeline(json!({ "url": PAGE }))).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_timeline_has_its_own_rate_limit_and_takes_no_live_slot() {
+    let (base, _) = spawn_fake(Behavior {
+        cdx_delay_ms: 200,
+        ..Behavior::default()
+    })
+    .await;
+    let app = app_for(Config {
+        timeline_rate_limit: 3,
+        live_max_concurrent: 1,
+        ..config(&base)
+    });
+    // A live run takes the only slot. The timeline still answers (T1.3).
+    let run = start(&app, good(PAGE, "2000-03-02")).await;
+    let (status, _, _) = call(&app, post_timeline(json!({ "url": PAGE }))).await;
+    assert_eq!(status, StatusCode::OK);
+    finish(&app, &run).await;
+    // The timeline's own limit applies: one used, two more allowed, then 429.
+    for _ in 0..2 {
+        let (status, _, _) = call(&app, post_timeline(json!({ "url": PAGE }))).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, headers, bytes) = call(&app, post_timeline(json!({ "url": PAGE }))).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(headers.contains_key(header::RETRY_AFTER));
+    assert_eq!(as_json(&bytes)["error"]["code"], "rate_limited");
+    // Spending timeline lookups does not use up the live-run allowance.
+    let _ = start(&app, good(PAGE, "2000-03-02")).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_query_string_is_dropped_and_reported() {
+    let (base, fake) = spawn_fake(Behavior::default()).await;
+    let app = app_for(config(&base));
+    let (_, _, bytes) = call(
+        &app,
+        post_timeline(json!({ "url": "http://www.y2k.gov/briefings.html?token=secret#x" })),
+    )
+    .await;
+    let v = as_json(&bytes);
+    assert!(v["notes"][0].as_str().unwrap().contains("ignored"));
+    for line in fake.log.lock().unwrap().iter() {
+        assert!(
+            !line.contains("secret"),
+            "the query string reached the archive: {line}"
+        );
+    }
 }

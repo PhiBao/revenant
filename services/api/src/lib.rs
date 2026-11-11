@@ -53,6 +53,8 @@ pub struct Config {
     pub live_max_concurrent: usize,
     pub live_rate_limit: u32,
     pub live_rate_window: Duration,
+    /// Timeline lookups per client per window (T1.3).
+    pub timeline_rate_limit: u32,
 }
 
 impl Default for Config {
@@ -73,6 +75,7 @@ impl Default for Config {
             live_max_concurrent: 2,
             live_rate_limit: 6,
             live_rate_window: Duration::from_secs(600),
+            timeline_rate_limit: 20,
         }
     }
 }
@@ -166,6 +169,7 @@ pub struct App {
     jobs: Mutex<Store>,
     hits: Mutex<HashMap<String, (Instant, u32)>>,
     live_hits: Mutex<HashMap<String, (Instant, u32)>>,
+    timeline_hits: Mutex<HashMap<String, (Instant, u32)>>,
     runs: Mutex<RunStore>,
     live_active: AtomicUsize,
     archive: Arc<live::ArchiveClient>,
@@ -202,6 +206,7 @@ impl App {
             jobs: Mutex::new(Store::default()),
             hits: Mutex::new(HashMap::new()),
             live_hits: Mutex::new(HashMap::new()),
+            timeline_hits: Mutex::new(HashMap::new()),
             runs: Mutex::new(RunStore::default()),
             live_active: AtomicUsize::new(0),
             archive: Arc::new(archive),
@@ -259,6 +264,15 @@ impl App {
             &self.live_hits,
             key,
             self.cfg.live_rate_limit,
+            self.cfg.live_rate_window,
+        )
+    }
+
+    fn timeline_rate_check(&self, key: &str) -> Option<u64> {
+        Self::window_check(
+            &self.timeline_hits,
+            key,
+            self.cfg.timeline_rate_limit,
             self.cfg.live_rate_window,
         )
     }
@@ -387,6 +401,10 @@ pub fn router(app: Arc<App>) -> Router {
             post(live_create).layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
         )
         .route("/api/live/{id}", get(live_show))
+        .route(
+            "/api/timeline",
+            post(timeline).layer(DefaultBodyLimit::max(MAX_BODY_BYTES)),
+        )
         .route("/api/resurrections/{id}", get(show))
         .route("/api/resurrections/{id}/archive.zip", get(download))
         .route("/p/{id}", get(preview_redirect))
@@ -961,6 +979,101 @@ async fn live_show(
         }
     };
     Ok(Json(body))
+}
+
+// ---------------------------------------------------------------- timeline (T)
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimelineBody {
+    url: String,
+}
+
+/// One archive question, run on a blocking thread because the archive client is synchronous.
+async fn timeline(
+    State(app): State<Arc<App>>,
+    Extension(client): Extension<ClientKey>,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(wait) = app.timeline_rate_check(&client.0) {
+        let mut e = ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "Too many lookups. Wait a moment and try again.",
+        );
+        e.retry_after = Some(wait);
+        return Err(e);
+    }
+    let bytes = body.map_err(|r| {
+        if r.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "body_too_large",
+                format!("The request body is limited to {MAX_BODY_BYTES} bytes."),
+            )
+        } else {
+            ApiError::bad("bad_body", "Could not read the request body.")
+        }
+    })?;
+    let req: TimelineBody = serde_json::from_slice(&bytes)
+        .map_err(|e| ApiError::bad("bad_request", format!("Invalid request: {e}")))?;
+    let target = live::parse_target(&req.url).map_err(|e| ApiError::bad("bad_url", e.0))?;
+    let label = target.label();
+
+    let client = app.archive.clone();
+    let key = label.clone();
+    let rows = tokio::task::spawn_blocking(move || client.timeline(&key))
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "The lookup failed.",
+            )
+        })?
+        .map_err(|e| {
+            tracing::warn!(why = %e.0, "timeline lookup failed");
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "archive_unavailable",
+                "The archive could not be reached. This is not the same as nothing being there.",
+            )
+        })?;
+
+    let truncated = rows.len() > live::MAX_TIMELINE_MONTHS;
+    let mut months: Vec<Value> = Vec::new();
+    for row in rows.iter().take(live::MAX_TIMELINE_MONTHS) {
+        // Rows with a timestamp we cannot read are dropped, never guessed at.
+        if parse_cdx_timestamp(&row.timestamp).is_some() {
+            months.push(json!({
+                "month": &row.timestamp[..6],
+                "first_capture": row.timestamp,
+                "digest": row.digest,
+            }));
+        }
+    }
+    let first = months
+        .first()
+        .and_then(|v| v["first_capture"].as_str().map(str::to_string));
+    let latest = months
+        .last()
+        .and_then(|v| v["month"].as_str().map(str::to_string));
+    Ok(Json(json!({
+        "site": target.site,
+        "page": target.page,
+        "label": label,
+        "first_capture": first,
+        // True of the whole history: the last month that holds a capture (T1.7).
+        "latest_month": latest,
+        "month_count": months.len(),
+        "months": months,
+        "truncated": truncated,
+        "notes": if target.dropped_query {
+            json!(["The query string and fragment were ignored. Only the site and path are used."])
+        } else {
+            json!([])
+        },
+    })))
 }
 
 // ---------------------------------------------------------------- helpers
