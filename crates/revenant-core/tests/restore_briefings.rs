@@ -141,3 +141,51 @@ fn cdx_string_round_trips() {
         assert_eq!(cdx_string(unix), s);
     }
 }
+
+mod rewritten {
+    use super::*;
+    use revenant_core::rewrite::{rewrite_html, Context};
+    use std::collections::BTreeSet;
+
+    fn page() -> (Vec<Entry>, Vec<u8>) {
+        let entries = restore("20000302000000");
+        let set: BTreeSet<String> = entries.iter().map(|e| e.path.clone()).collect();
+        let html = entries
+            .iter()
+            .find(|e| e.path == "briefings.html")
+            .expect("page present")
+            .bytes
+            .clone();
+        let ctx = Context {
+            page_path: "briefings.html",
+            restored: &set,
+            site_hosts: &["y2k.gov"],
+        };
+        let out = rewrite_html(&html, &ctx).expect("rewrites");
+        (entries, out.bytes)
+    }
+
+    #[test]
+    fn rewritten_page_has_no_archive_host() {
+        let (_, bytes) = page();
+        let text: String = bytes.iter().map(|&b| b as char).collect();
+        assert!(!text.contains("web.archive.org"));
+    }
+
+    #[test]
+    fn rewritten_page_flags_the_pages_that_were_not_restored() {
+        let (_, bytes) = page();
+        let text: String = bytes.iter().map(|&b| b as char).collect();
+        // The briefings page links to dozens of docs/*.html pages that are not in this restore.
+        assert!(text.matches("data-revenant=\"not-restored\"").count() > 10);
+    }
+
+    #[test]
+    fn restored_images_stay_linked() {
+        let (_, bytes) = page();
+        let text: String = bytes.iter().map(|&b| b as char).collect();
+        for n in [1, 3, 4, 5, 6, 7] {
+            assert!(text.contains(&format!("images/{n}.gif")), "images/{n}.gif");
+        }
+    }
+}
