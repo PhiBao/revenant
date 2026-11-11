@@ -53,3 +53,13 @@ Fixture: `fixtures/snapshots/y2k-briefings/captures.tsv`. Test: `crates/revenant
 Autopsy at this date: Completeness 7 of 12 files (58.3%, counting the anachronisms as recovered). Fidelity 0 of 7.
 
 Why this date: it shows all three verdicts for one page. The two-day gap is real, and it is the kind of difference the fidelity model exists to surface.
+
+## Blob verification (Nov 11, 2026)
+
+Bodies were fetched with `id_` replay at each capture's timestamp and stored by SHA-256 in `fixtures/snapshots/y2k-briefings/blobs/`. The manifest is `blobs.tsv`.
+
+**Finding:** only 2 of 8 fetched bodies had a SHA-1 (base32) equal to the CDX `digest` field. The served sizes matched the archived `x-archive-orig-content-length` header, so the bytes look complete. The CDX digest is therefore not a reliable hash of the served bytes.
+
+Consequence for the engine: Proven and Likely depend on digest equality between captures, which assumes the CDX digest is consistent across captures of the same content. That assumption is unverified. The next check is to find two captures with equal CDX digests and compare their served bytes. Until then, the restored ZIP's identity is defined by the SHA-256 of the bytes it contains, and the certificate reports the CDX digest only as the archive's claim.
+
+**Provenance detail:** the archive stamps a capture time (for example 2000-03-04) that can be later than the origin's own date. A gif served with `x-archive-orig-last-modified: Mon, 27 Dec 1999` came out of a capture stamped 2000-03-04. The capture time, not the origin's date, is what the classifier uses. The origin headers are a candidate second signal for a later version of the model.
