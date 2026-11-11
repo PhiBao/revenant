@@ -1,0 +1,15 @@
+services:
+  revenant:
+    build: .
+    image: revenant
+    ports:
+      - "8080:8080"
+    # Set when the container sits behind a reverse proxy you control, so rate limits see the
+    # visitor's address instead of the proxy's.
+    # environment:
+    #   REVENANT_TRUST_PROXY: "1"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true

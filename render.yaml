@@ -1,0 +1,15 @@
+# Render blueprint: a free web service built from the Dockerfile.
+# Deploy: https://render.com/deploy?repo=https://github.com/PhiBao/revenant
+#
+# The free tier sleeps after idle time and wakes on the next request (about a minute).
+services:
+  - type: web
+    name: revenant
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      # Render terminates TLS in front of the container, so read the visitor's address from
+      # X-Forwarded-For. Only valid because the container is reachable only through that proxy.
+      - key: REVENANT_TRUST_PROXY
+        value: "1"

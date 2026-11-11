@@ -1,0 +1,10 @@
+.git
+target
+**/node_modules
+apps/web/.next
+apps/web/out
+PLAN.md
+.kiro/specs
+docs
+*.md
+!README.md
