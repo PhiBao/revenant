@@ -16,8 +16,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 
-use lol_html::html_content::Element;
-use lol_html::{doc_comments, element, rewrite_str, RewriteStrSettings};
+use lol_html::html_content::{ContentType, Element};
+use lol_html::{doc_comments, element, rewrite_str, text, RewriteStrSettings};
 
 const URL_ATTRS: [&str; 5] = ["src", "href", "background", "action", "poster"];
 const ARCHIVE_HOST: &str = "web.archive.org";
@@ -43,6 +43,8 @@ pub struct Output {
     pub links: Vec<String>,
     pub scripts_removed: usize,
     pub archive_urls_unwrapped: usize,
+    /// Script-running CSS constructs neutralised in `<style>` blocks and `style=""` (R9.5).
+    pub css_neutralised: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -62,11 +64,50 @@ pub fn rewrite_html(input: &[u8], ctx: &Context) -> Result<Output, RewriteError>
     let links = RefCell::new(Vec::<String>::new());
     let scripts = Cell::new(0usize);
     let unwrapped = Cell::new(0usize);
+    let neutralised = Cell::new(0usize);
+    let style_buffer = RefCell::new(String::new());
+
+    // Merge what the CSS reader found in a `<style>` block or `style=""` into the page's lists.
+    let absorb = |f: crate::css::CssFindings| {
+        for p in f.assets {
+            let mut list = assets.borrow_mut();
+            if !list.contains(&p) {
+                list.push(p);
+            }
+        }
+        for p in f.not_restored {
+            let mut list = not_restored.borrow_mut();
+            if !list.contains(&p) {
+                list.push(p);
+            }
+        }
+        neutralised.set(neutralised.get() + f.neutralised);
+        unwrapped.set(unwrapped.get() + f.archive_urls_unwrapped);
+    };
 
     let settings = RewriteStrSettings::new()
         .append_element_content_handler(element!("script", |el: &mut Element| {
             scripts.set(scripts.get() + 1);
             el.remove();
+            Ok(())
+        }))
+        .append_element_content_handler(text!("style", |chunk| {
+            // R9.2: a `<style>` block arrives in pieces. Collect them, and at the last piece write
+            // the rewritten block back as raw text.
+            style_buffer.borrow_mut().push_str(chunk.as_str());
+            chunk.remove();
+            if chunk.last_in_text_node() {
+                let original = std::mem::take(&mut *style_buffer.borrow_mut());
+                let (mut rewritten, findings) = crate::css::rewrite_css_str(&original, ctx);
+                // Text inside <style> cannot contain a closing tag, so one in the output was
+                // introduced by the rewrite. Keep the original instead.
+                if rewritten.to_ascii_lowercase().contains("</style") {
+                    rewritten = original;
+                } else {
+                    absorb(findings);
+                }
+                chunk.replace(&rewritten, ContentType::Html);
+            }
             Ok(())
         }))
         .append_element_content_handler(element!("base", |el: &mut Element| {
@@ -83,6 +124,15 @@ pub fn rewrite_html(input: &[u8], ctx: &Context) -> Result<Output, RewriteError>
                 .collect();
             for name in event_attrs {
                 el.remove_attribute(&name);
+            }
+
+            // R9.2: references inside `style=""` are read like any stylesheet's.
+            if let Some(value) = el.get_attribute("style") {
+                let (rewritten, findings) = crate::css::rewrite_css_str(&value, ctx);
+                absorb(findings);
+                if rewritten != value {
+                    let _ = el.set_attribute("style", &rewritten);
+                }
             }
 
             let mut flagged = false;
@@ -166,11 +216,12 @@ pub fn rewrite_html(input: &[u8], ctx: &Context) -> Result<Output, RewriteError>
         links: links.into_inner(),
         scripts_removed: scripts.get(),
         archive_urls_unwrapped: unwrapped.get(),
+        css_neutralised: neutralised.get(),
     })
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Resolution {
+pub(crate) enum Resolution {
     Unchanged,
     Replace {
         value: String,
@@ -186,7 +237,7 @@ enum Resolution {
     Drop,
 }
 
-fn resolve(ctx: &Context, raw: &str) -> Resolution {
+pub(crate) fn resolve(ctx: &Context, raw: &str) -> Resolution {
     let value = raw.trim();
     let lower = value.to_ascii_lowercase();
     if value.is_empty()
@@ -523,6 +574,70 @@ mod tests {
     fn fragments_are_kept_and_queries_dropped() {
         let o = run("a.html", &["b.html"], r##"<a href="b.html?x=1#top">b</a>"##);
         assert_eq!(text(&o), r##"<a href="b.html#top">b</a>"##);
+    }
+
+    // ---- R9: CSS inside the page ----
+
+    #[test]
+    fn style_blocks_are_read_and_their_references_become_assets() {
+        let o = run(
+            "a.html",
+            &["img/bg.gif"],
+            "<style>body{background:url(http://www.y2k.gov/img/bg.gif)} p{background:url(gone.gif)}</style>",
+        );
+        assert_eq!(
+            text(&o),
+            "<style>body{background:url(img/bg.gif)} p{background:url(gone.gif)}</style>"
+        );
+        assert_eq!(o.assets, ["img/bg.gif", "gone.gif"]);
+        assert_eq!(o.not_restored, ["gone.gif"]);
+    }
+
+    #[test]
+    fn style_attributes_are_read_too() {
+        let o = run(
+            "docs/a.html",
+            &["img/bg.gif"],
+            r#"<td style="background:url(/img/bg.gif) no-repeat">x</td>"#,
+        );
+        assert_eq!(
+            text(&o),
+            r#"<td style="background:url(../img/bg.gif) no-repeat">x</td>"#
+        );
+        assert_eq!(o.assets, ["img/bg.gif"]);
+    }
+
+    #[test]
+    fn script_running_css_in_a_page_is_neutralised_and_counted() {
+        let o = run(
+            "a.html",
+            &[],
+            r#"<style>a{width:expression(alert(1))}</style><div style="behavior:url(x.htc)">y</div>"#,
+        );
+        let t = text(&o);
+        assert!(!t.contains("expression") && !t.contains("behavior"), "{t}");
+        assert_eq!(o.css_neutralised, 2);
+    }
+
+    #[test]
+    fn a_style_block_that_cannot_be_rewritten_safely_is_kept_as_it_was() {
+        // Whatever the CSS reader does, a closing style tag must never appear in its output.
+        let o = run(
+            "a.html",
+            &[],
+            "<style>a{b:c} /* </style> */ d{e:f}</style><p>after</p>",
+        );
+        let t = text(&o);
+        assert!(t.contains("<p>after</p>"), "{t}");
+        assert_eq!(t.matches("</style>").count(), 2, "{t}");
+    }
+
+    #[test]
+    fn a_page_without_style_is_unaffected_by_the_css_reader() {
+        let input = r#"<p style="color:red">hi</p><style></style>"#;
+        let o = run("a.html", &[], input);
+        assert_eq!(text(&o), input);
+        assert!(o.assets.is_empty());
     }
 
     #[test]

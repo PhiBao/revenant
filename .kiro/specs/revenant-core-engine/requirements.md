@@ -90,3 +90,17 @@ Why: the verdicts live in a table below the page. A visitor looking at the resto
 - R8.7 Bytes outside the markup SHALL be left exactly as they were, as in R5's rewriter.
 - R8.8 WHEN there is nothing to annotate THEN the input SHALL be returned unchanged.
 - R8.9 The annotator SHALL NOT panic on arbitrary bytes.
+
+## R9 Stylesheets (added Nov 12, 2026)
+
+Why: a stylesheet is fetched and packaged today, but its contents are not read. Images it refers to with `url()`, stylesheets it pulls in with `@import`, and references inside `<style>` blocks and `style=""` attributes are never restored or reported, so most real pages come back unstyled or with silent holes. It also hides the case that shows date drift best: an old page wearing a newer stylesheet.
+
+- R9.1 The system SHALL read a stylesheet's `url(...)` references (quoted or unquoted) and `@import "..."` targets, resolve each against the stylesheet's own path, and treat each site file as an asset like any other (judged, fetched, listed, capped).
+- R9.2 The same reading SHALL apply to `<style>` blocks and `style=""` attributes in the page, resolved against the page.
+- R9.3 References inside comments and inside strings that are not URLs SHALL be ignored.
+- R9.4 Archive-wrapped URLs SHALL be unwrapped, references to restored files SHALL become relative paths, references to site files that were not restored SHALL be left as they were and listed as not restored, `data:` URLs SHALL be left alone, and `javascript:` URLs SHALL be replaced with `#`.
+- R9.5 Constructs that run script in old browsers (`expression(`, `behavior:`, `-moz-binding`) SHALL be neutralised, and counted.
+- R9.6 Following stylesheets from stylesheets SHALL stop at depth 3. A stylesheet that imports itself, directly or through others, SHALL be read once.
+- R9.7 The asset cap SHALL count every file found this way, not only those named by the page.
+- R9.8 A stylesheet's certificate entry SHALL carry the SHA-256 of the rewritten stylesheet, and its verdict SHALL be judged like any other file.
+- R9.9 Rewriting a stylesheet twice SHALL give the same bytes as rewriting it once. It SHALL NOT panic on arbitrary bytes. Bytes outside the references SHALL be left exactly as they were.

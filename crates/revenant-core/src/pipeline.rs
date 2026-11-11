@@ -2,13 +2,14 @@
 //!
 //! See requirement R5 in `.kiro/specs/revenant-core-engine/requirements.md`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
 
 use crate::autopsy::{summarize, LedgerRow};
+use crate::css::rewrite_css;
 use crate::fidelity::{classify, nearest, Capture, Selection, Verdict};
 use crate::index::parse_index;
 use crate::package::{build_zip, sha256_hex, Entry, PackageError};
@@ -17,6 +18,8 @@ use crate::time::{format_cdx_timestamp, parse_http_date};
 
 pub const MAX_ASSETS: usize = 500;
 pub const MAX_BYTES: usize = 64 * 1024 * 1024;
+/// How many stylesheets deep `@import` is followed (R9.6).
+pub const MAX_CSS_DEPTH: usize = 3;
 pub const CERTIFICATE_PATH: &str = "REVENANT-CERTIFICATE.json";
 const ARCHIVE_HOST: &str = "web.archive.org";
 
@@ -203,6 +206,8 @@ pub enum PipelineError {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct FileRecord {
     pub path: String,
+    /// The stylesheet this file was found in. Absent for files the page itself names (R9).
+    pub found_in: Option<String>,
     pub verdict: &'static str,
     /// What capture dates alone would have said (R6.9).
     pub verdict_from_dates_only: &'static str,
@@ -244,6 +249,8 @@ pub struct Certificate {
     pub scripts_removed: usize,
     pub archive_urls_unwrapped: usize,
     pub archive_host_text_mentions: usize,
+    /// Script-running CSS constructs neutralised, in the page and in stylesheets (R9.5).
+    pub css_constructs_neutralised: usize,
     pub notes: Vec<&'static str>,
 }
 
@@ -254,6 +261,25 @@ pub struct Resurrection {
     pub zip: Vec<u8>,
     pub zip_sha256: String,
     pub certificate: Certificate,
+}
+
+/// A file waiting to be judged and fetched.
+struct Queued {
+    path: String,
+    /// 1 for a file the page names. One more for each stylesheet it was found through.
+    depth: usize,
+    /// The stylesheet this file was found in, when it was not found in the page.
+    found_in: Option<String>,
+    /// Pulled in with `@import`, so it is a stylesheet whatever its name.
+    is_import: bool,
+}
+
+/// A stylesheet that is in the ZIP and still needs its final rewrite.
+struct Stylesheet {
+    path: String,
+    original: Vec<u8>,
+    entry_index: usize,
+    record_index: usize,
 }
 
 /// What the pipeline concluded about one file at the target time.
@@ -407,7 +433,7 @@ pub fn resurrect_with(
         });
     }
 
-    // 3. Judge and fetch every asset.
+    // 3. Judge and fetch every asset, following stylesheets (R9).
     let mut total_bytes = page_body.len();
     let mut records: Vec<FileRecord> = Vec::new();
     let mut ledger: Vec<LedgerRow> = Vec::new();
@@ -425,7 +451,25 @@ pub fn resurrect_with(
     });
     restored.insert(page_path.clone());
 
-    for asset in &discovery.assets {
+    // Every path ever queued, the page included. Its size is what the asset cap counts (R9.7), and
+    // a stylesheet that imports itself is read once (R9.6).
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    seen.insert(page_path.clone());
+    let mut queue: VecDeque<Queued> = VecDeque::new();
+    for a in &discovery.assets {
+        if seen.insert(a.clone()) {
+            queue.push_back(Queued {
+                path: a.clone(),
+                depth: 1,
+                found_in: None,
+                is_import: false,
+            });
+        }
+    }
+    let mut stylesheets: Vec<Stylesheet> = Vec::new();
+
+    while let Some(item) = queue.pop_front() {
+        let asset = &item.path;
         let label = format!("{}/{}", req.site, asset);
         let judged = match source.lookup(&label) {
             Lookup::Unknown(why) => {
@@ -439,6 +483,7 @@ pub fn resurrect_with(
                 });
                 records.push(FileRecord {
                     path: asset.clone(),
+                    found_in: item.found_in.clone(),
                     verdict: Verdict::Unknown.as_str(),
                     verdict_from_dates_only: Verdict::Unknown.as_str(),
                     basis: crate::fidelity::Basis::NotAnswered.text(),
@@ -460,6 +505,7 @@ pub fn resurrect_with(
         let choice = choice.cloned();
         let mut record = FileRecord {
             path: asset.clone(),
+            found_in: item.found_in.clone(),
             verdict: judged.sel.verdict.as_str(),
             verdict_from_dates_only: judged.dates_only.as_str(),
             basis: judged.sel.basis.text(),
@@ -489,6 +535,49 @@ pub fn resurrect_with(
                     record.sha256 = Some(sha256_hex(&bytes));
                     record.bytes = Some(bytes.len());
                     restored.insert(asset.clone());
+
+                    // A stylesheet's own references are assets too (R9.1). Read it now, with
+                    // nothing restored yet, to learn what it needs. It is rewritten for real
+                    // once every file's fate is known.
+                    let is_css = item.is_import || asset.to_ascii_lowercase().ends_with(".css");
+                    if is_css {
+                        let found = rewrite_css(
+                            &bytes,
+                            &Context {
+                                page_path: asset,
+                                restored: &empty,
+                                site_hosts: &hosts,
+                            },
+                        )
+                        .findings;
+                        for p in found.assets {
+                            let import = found.imports.contains(&p);
+                            // Imports stop at a fixed depth. Plain images are always followed.
+                            if import && item.depth >= MAX_CSS_DEPTH {
+                                continue;
+                            }
+                            if seen.insert(p.clone()) {
+                                if seen.len() - 1 > limits.max_assets {
+                                    return Err(PipelineError::TooManyAssets {
+                                        found: seen.len() - 1,
+                                        cap: limits.max_assets,
+                                    });
+                                }
+                                queue.push_back(Queued {
+                                    path: p,
+                                    depth: item.depth + 1,
+                                    found_in: Some(asset.clone()),
+                                    is_import: import,
+                                });
+                            }
+                        }
+                        stylesheets.push(Stylesheet {
+                            path: asset.clone(),
+                            original: bytes.clone(),
+                            entry_index: entries.len(),
+                            record_index: records.len(),
+                        });
+                    }
                     entries.push(Entry {
                         path: asset.clone(),
                         bytes,
@@ -520,6 +609,23 @@ pub fn resurrect_with(
         records.push(record);
     }
 
+    // Rewrite every stylesheet now that the set of restored files is final (R9.8).
+    let mut css_neutralised = 0;
+    for sheet in &stylesheets {
+        let out = rewrite_css(
+            &sheet.original,
+            &Context {
+                page_path: &sheet.path,
+                restored: &restored,
+                site_hosts: &hosts,
+            },
+        );
+        css_neutralised += out.findings.neutralised;
+        records[sheet.record_index].sha256 = Some(sha256_hex(&out.bytes));
+        records[sheet.record_index].bytes = Some(out.bytes.len());
+        entries[sheet.entry_index].bytes = out.bytes;
+    }
+
     // 4. Rewrite the page with the real restored set.
     let rewritten = rewrite_html(
         &page_body,
@@ -536,6 +642,7 @@ pub fn resurrect_with(
 
     let page_record = FileRecord {
         path: page_path.clone(),
+        found_in: None,
         verdict: page.sel.verdict.as_str(),
         verdict_from_dates_only: page.dates_only.as_str(),
         basis: page.sel.basis.text(),
@@ -585,6 +692,7 @@ pub fn resurrect_with(
         scripts_removed: rewritten.scripts_removed,
         archive_urls_unwrapped: rewritten.archive_urls_unwrapped,
         archive_host_text_mentions: mentions,
+        css_constructs_neutralised: css_neutralised + rewritten.css_neutralised,
         notes: vec![
             "Archive digests are the archive's claim. File identity here is the SHA-256 of the bytes.",
             "The SHA-256 of the page is of the rewritten page, not the archived original.",

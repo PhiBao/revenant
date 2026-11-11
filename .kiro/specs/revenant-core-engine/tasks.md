@@ -14,3 +14,5 @@
 - [ ] T12 R6: `origin_modified`, `parse_http_date`, `Verdict::Attested`, `Basis`, classify rules, property tests.
 - [ ] T13 R6.8/R6.9: pipeline asks the source for the origin time, certificate records basis and dates-only vitals.
 - [ ] T14 R7: `nearest` restore.
+- [x] T12 R6 server evidence. [x] T13 pipeline asks for the origin date. [x] T14 R7 nearest. [x] T15 R8 annotated view.
+- [ ] T16 R9: CSS reader (`src/css.rs`), `<style>` and `style=""` in the HTML rewriter, pipeline worklist with depth and cap.

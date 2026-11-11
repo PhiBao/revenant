@@ -532,3 +532,220 @@ fn a_caller_cannot_raise_the_caps() {
         })
     );
 }
+
+// ---------------------------------------------------------------- R9: stylesheets
+
+/// A mock site where every named file has one capture before the mock target (2000-06-01).
+fn site(files: &[(&str, &str)]) -> Mock {
+    let page = files
+        .iter()
+        .find(|(p, _)| *p == "p.html")
+        .map(|(_, b)| *b)
+        .expect("p.html in the site");
+    let mut m = mock_with_page(page);
+    for (path, body) in files.iter().filter(|(p, _)| *p != "p.html") {
+        let label = format!("s.org/{path}");
+        m.lookups.insert(
+            label.clone(),
+            Lookup::Captures(vec![cap("20000101000000", path)]),
+        );
+        m.bodies.insert(label, body.as_bytes().to_vec());
+    }
+    m
+}
+
+fn included(c: &revenant_core::pipeline::Certificate) -> Vec<&str> {
+    let mut v: Vec<&str> = c
+        .files
+        .iter()
+        .filter(|f| f.included)
+        .map(|f| f.path.as_str())
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn a_stylesheets_own_references_are_restored_and_say_where_they_were_found() {
+    let m = site(&[
+        ("p.html", r#"<link rel="stylesheet" href="css/site.css">"#),
+        (
+            "css/site.css",
+            "body{background:url(../img/bg.gif)} @import 'more.css';",
+        ),
+        ("css/more.css", "a{background:url(../img/link.gif)}"),
+        ("img/bg.gif", "GIF8bg"),
+        ("img/link.gif", "GIF8link"),
+    ]);
+    let r = resurrect(&m, &mock_request()).unwrap();
+    assert_eq!(
+        included(&r.certificate),
+        [
+            "css/more.css",
+            "css/site.css",
+            "img/bg.gif",
+            "img/link.gif",
+            "p.html"
+        ]
+    );
+    let bg = record(&r.certificate, "img/bg.gif");
+    assert_eq!(bg.found_in.as_deref(), Some("css/site.css"));
+    let link = record(&r.certificate, "img/link.gif");
+    assert_eq!(link.found_in.as_deref(), Some("css/more.css"));
+    assert_eq!(record(&r.certificate, "css/site.css").found_in, None);
+}
+
+#[test]
+fn an_import_is_a_stylesheet_even_without_a_css_extension() {
+    let m = site(&[
+        ("p.html", r#"<link rel="stylesheet" href="a.css">"#),
+        ("a.css", "@import url(theme.txt);"),
+        ("theme.txt", "p{background:url(t.gif)}"),
+        ("t.gif", "GIF8t"),
+    ]);
+    let r = resurrect(&m, &mock_request()).unwrap();
+    assert!(
+        included(&r.certificate).contains(&"t.gif"),
+        "{:?}",
+        included(&r.certificate)
+    );
+}
+
+#[test]
+fn the_stylesheet_in_the_zip_is_rewritten_with_the_final_restored_set() {
+    // gone.gif is not archived, so the reference must be kept as written. bg.gif is, and an
+    // absolute reference to it must become relative.
+    let m = site(&[
+        ("p.html", r#"<link rel="stylesheet" href="css/site.css">"#),
+        (
+            "css/site.css",
+            "a{background:url(http://www.s.org/img/bg.gif)} b{background:url(gone.gif)}",
+        ),
+        ("img/bg.gif", "GIF8bg"),
+    ]);
+    let r = resurrect(&m, &mock_request()).unwrap();
+    let css = r.entries.iter().find(|e| e.path == "css/site.css").unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&css.bytes),
+        "a{background:url(../img/bg.gif)} b{background:url(gone.gif)}"
+    );
+    // The certificate hash is of the rewritten stylesheet (R9.8).
+    let rec = record(&r.certificate, "css/site.css");
+    assert_eq!(
+        rec.sha256.as_deref(),
+        Some(revenant_core::package::sha256_hex(&css.bytes).as_str())
+    );
+    assert_eq!(rec.bytes, Some(css.bytes.len()));
+    assert_eq!(record(&r.certificate, "css/gone.gif").verdict, "MISSING");
+}
+
+#[test]
+fn a_stylesheet_that_imports_itself_is_read_once() {
+    let m = site(&[
+        ("p.html", r#"<link rel="stylesheet" href="a.css">"#),
+        ("a.css", "@import 'b.css'; a{color:red}"),
+        ("b.css", "@import 'a.css'; b{color:red}"),
+    ]);
+    let r = resurrect(&m, &mock_request()).unwrap();
+    assert_eq!(included(&r.certificate), ["a.css", "b.css", "p.html"]);
+    assert_eq!(
+        r.certificate
+            .files
+            .iter()
+            .filter(|f| f.path == "a.css")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn imports_stop_at_the_depth_limit_but_images_are_still_followed() {
+    // p -> c1 -> c2 -> c3 -> c4. c4 would be depth 4, so it is not fetched. c3's image is.
+    let m = site(&[
+        ("p.html", r#"<link rel="stylesheet" href="c1.css">"#),
+        ("c1.css", "@import 'c2.css';"),
+        ("c2.css", "@import 'c3.css';"),
+        ("c3.css", "@import 'c4.css'; a{background:url(deep.gif)}"),
+        ("c4.css", "z{color:red}"),
+        ("deep.gif", "GIF8d"),
+    ]);
+    let r = resurrect(&m, &mock_request()).unwrap();
+    let got = included(&r.certificate);
+    assert!(
+        got.contains(&"c3.css") && got.contains(&"deep.gif"),
+        "{got:?}"
+    );
+    assert!(!got.contains(&"c4.css"), "{got:?}");
+    // The reference is left as written in c3.css, so the stylesheet still says what it wanted.
+    let c3 = r.entries.iter().find(|e| e.path == "c3.css").unwrap();
+    assert!(String::from_utf8_lossy(&c3.bytes).contains("c4.css"));
+}
+
+#[test]
+fn the_asset_cap_counts_files_found_inside_stylesheets() {
+    // The page names one stylesheet; the stylesheet names 11 images. A cap of 10 must trip.
+    let imgs: String = (0..11)
+        .map(|i| format!("a{i}{{background:url(i{i}.gif)}}"))
+        .collect();
+    let m = site(&[
+        ("p.html", r#"<link rel="stylesheet" href="s.css">"#),
+        ("s.css", imgs.as_str()),
+    ]);
+    let err = resurrect_with(&m, &mock_request(), Limits::new(10, 1 << 20)).unwrap_err();
+    assert_eq!(err, PipelineError::TooManyAssets { found: 11, cap: 10 });
+}
+
+#[test]
+fn style_blocks_and_attributes_in_the_page_feed_the_same_worklist() {
+    let m = site(&[
+        (
+            "p.html",
+            r#"<style>@import 'base.css';</style><td style="background:url(tile.gif)">x</td>"#,
+        ),
+        ("base.css", "p{background:url(p.gif)}"),
+        ("tile.gif", "GIF8t"),
+        ("p.gif", "GIF8p"),
+    ]);
+    let r = resurrect(&m, &mock_request()).unwrap();
+    assert_eq!(
+        included(&r.certificate),
+        ["base.css", "p.gif", "p.html", "tile.gif"]
+    );
+}
+
+#[test]
+fn script_running_css_is_neutralised_everywhere_and_counted_once() {
+    let m = site(&[
+        (
+            "p.html",
+            r#"<link rel="stylesheet" href="s.css"><div style="behavior:url(x.htc)">y</div>"#,
+        ),
+        ("s.css", "a{width:expression(alert(1))}"),
+    ]);
+    let r = resurrect(&m, &mock_request()).unwrap();
+    assert_eq!(r.certificate.css_constructs_neutralised, 2);
+    for e in &r.entries {
+        let t = String::from_utf8_lossy(&e.bytes);
+        if e.path != revenant_core::pipeline::CERTIFICATE_PATH {
+            assert!(
+                !t.contains("expression") && !t.contains("behavior"),
+                "{}: {t}",
+                e.path
+            );
+        }
+    }
+}
+
+#[test]
+fn the_same_stylesheet_restore_gives_the_same_zip() {
+    let build = || {
+        site(&[
+            ("p.html", r#"<link rel="stylesheet" href="s.css">"#),
+            ("s.css", "a{background:url(i.gif)}"),
+            ("i.gif", "GIF8i"),
+        ])
+    };
+    let a = resurrect(&build(), &mock_request()).unwrap();
+    let b = resurrect(&build(), &mock_request()).unwrap();
+    assert_eq!(a.zip, b.zip);
+}

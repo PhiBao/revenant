@@ -5,6 +5,7 @@
 
 pub mod annotate;
 pub mod autopsy;
+pub mod css;
 pub mod fidelity;
 pub mod index;
 pub mod package;

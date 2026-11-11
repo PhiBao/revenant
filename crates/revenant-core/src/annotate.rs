@@ -384,6 +384,7 @@ mod tests {
         let widest = 130 - 6;
         let sample = |verdict: &'static str, included: bool| FileRecord {
             path: "x".into(),
+            found_in: None,
             verdict,
             verdict_from_dates_only: verdict,
             basis: String::new(),
