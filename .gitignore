@@ -1,0 +1,7 @@
+# Build outputs and local data. Never ignore .kiro/ (see PLAN.md §1.4).
+/target
+/data
+/.env
+*.env.local
+node_modules/
+.next/
