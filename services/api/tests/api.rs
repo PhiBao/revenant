@@ -110,10 +110,12 @@ async fn zip_download_matches_the_reported_hash() {
         call(&a, get(&format!("/api/resurrections/{id}/archive.zip"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::CONTENT_TYPE], "application/zip");
-    assert!(headers[header::CONTENT_DISPOSITION]
-        .to_str()
-        .unwrap()
-        .starts_with("attachment;"));
+    let disposition = headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+    assert!(disposition.starts_with("attachment;"), "{disposition}");
+    assert!(
+        disposition.contains("revenant-y2k-briefings-2000-03-02-with-anachronisms.zip"),
+        "{disposition}"
+    );
     // Hash with the system tool so the test does not reuse the code under test.
     let mut child = Command::new("sha256sum")
         .stdin(Stdio::piped())

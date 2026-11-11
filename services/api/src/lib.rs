@@ -82,6 +82,8 @@ struct Example {
 struct Job {
     example_id: String,
     date: String,
+    /// `strict` or `with-anachronisms`, used in the download file name.
+    policy: &'static str,
     created: Instant,
     result: Resurrection,
 }
@@ -345,6 +347,7 @@ fn job_view(id: &str, job: &Job, ttl: Duration) -> Value {
         "id": id,
         "example": job.example_id,
         "date": job.date,
+        "policy": job.policy,
         "mode": job.result.certificate.mode,
         "expires_in_secs": remaining,
         "zip_sha256": job.result.zip_sha256,
@@ -438,6 +441,10 @@ async fn create(
     let job = Job {
         example_id: example.info.id.clone(),
         date: req.date.clone(),
+        policy: match req.policy {
+            PolicyField::Strict => "strict",
+            PolicyField::IncludeAnachronisms => "with-anachronisms",
+        },
         created: Instant::now(),
         result,
     };
@@ -459,7 +466,10 @@ async fn download(
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     let job = app.job(&id).ok_or_else(ApiError::not_found)?;
-    let name = format!("revenant-{}-{}.zip", job.example_id, job.date);
+    let name = format!(
+        "revenant-{}-{}-{}.zip",
+        job.example_id, job.date, job.policy
+    );
     let mut res = Response::new(Body::from(job.result.zip.clone()));
     let h = res.headers_mut();
     h.insert(

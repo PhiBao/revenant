@@ -5,3 +5,6 @@
 *.env.local
 node_modules/
 .next/
+apps/web/out/
+next-env.d.ts
+*.tsbuildinfo
