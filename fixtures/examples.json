@@ -1,0 +1,16 @@
+[
+  {
+    "id": "y2k-briefings",
+    "title": "Y2K.gov: the briefings page",
+    "dir": "y2k-briefings",
+    "site": "y2k.gov",
+    "page": "briefings.html",
+    "default_date": "2000-03-02",
+    "alternate_dates": [
+      { "date": "2000-03-05", "label": "After the images were archived" },
+      { "date": "1999-01-01", "label": "Before the page was captured" }
+    ],
+    "blurb": "A page from the US government's Year 2000 information site. The site's domain no longer resolves. The archive holds two versions of this page and six images captured two days after the first version.",
+    "rights": "US federal government work, public domain (17 U.S.C. 105). Fixture provenance: fixtures/snapshots/y2k-briefings/PROVENANCE.md."
+  }
+]

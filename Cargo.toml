@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/revenant-core"]
+members = ["crates/revenant-core", "services/api"]
 
 [workspace.package]
 version = "0.1.0"

@@ -196,6 +196,8 @@ pub struct Certificate {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Resurrection {
+    /// The files inside the ZIP, in the order they were added. Used to serve previews.
+    pub entries: Vec<Entry>,
     pub zip: Vec<u8>,
     pub zip_sha256: String,
     pub certificate: Certificate,
@@ -425,6 +427,7 @@ pub fn resurrect(
     let zip_sha256 = sha256_hex(&zip);
 
     Ok(Resurrection {
+        entries,
         zip,
         zip_sha256,
         certificate,

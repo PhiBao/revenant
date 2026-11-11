@@ -1,0 +1,369 @@
+//! API tests mapped to `.kiro/specs/resurrection-api/requirements.md`.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::http::{header, Method, Request, StatusCode};
+use http_body_util::BodyExt;
+use revenant_api::{router, App, Config};
+use serde_json::{json, Value};
+use tower::ServiceExt;
+
+fn config() -> Config {
+    Config {
+        fixtures_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"),
+        ..Config::default()
+    }
+}
+
+fn app(cfg: Config) -> axum::Router {
+    router(App::new(cfg).expect("app loads"))
+}
+
+async fn call(
+    app: &axum::Router,
+    req: Request<Body>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let res = app.clone().oneshot(req).await.expect("response");
+    let status = res.status();
+    let headers = res.headers().clone();
+    let body = res
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes()
+        .to_vec();
+    (status, headers, body)
+}
+
+fn get(uri: &str) -> Request<Body> {
+    Request::builder().uri(uri).body(Body::empty()).unwrap()
+}
+
+fn post(body: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/api/resurrections")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn as_json(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).expect("json body")
+}
+
+async fn create(app: &axum::Router, date: &str, policy: &str) -> Value {
+    let body = json!({ "example": "y2k-briefings", "date": date, "policy": policy });
+    let (status, _, bytes) = call(app, post(&body.to_string())).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    as_json(&bytes)
+}
+
+#[tokio::test]
+async fn health_is_ok() {
+    let (status, _, _) = call(&app(config()), get("/api/health")).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn examples_list_the_seeded_fixture_with_its_rights_basis() {
+    let (status, _, body) = call(&app(config()), get("/api/examples")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v = as_json(&body);
+    let ex = &v["examples"][0];
+    assert_eq!(ex["id"], "y2k-briefings");
+    assert_eq!(ex["default_date"], "2000-03-02");
+    assert!(ex["rights"].as_str().unwrap().contains("public domain"));
+    assert!(
+        ex.get("dir").is_none(),
+        "internal directory names stay private"
+    );
+}
+
+#[tokio::test]
+async fn create_returns_a_seeded_job_with_certificate_and_urls() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "include-anachronisms").await;
+    assert_eq!(v["mode"], "SEEDED");
+    assert_eq!(v["id"].as_str().unwrap().len(), 32);
+    assert_eq!(v["certificate"]["files"][0]["verdict"], "UNCERTAIN");
+    assert_eq!(v["certificate"]["vitals"]["completeness_percent"], 58.3);
+    let id = v["id"].as_str().unwrap();
+    assert_eq!(v["urls"]["preview"], format!("/p/{id}/"));
+}
+
+#[tokio::test]
+async fn zip_download_matches_the_reported_hash() {
+    use std::process::{Command, Stdio};
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "include-anachronisms").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, headers, zip) =
+        call(&a, get(&format!("/api/resurrections/{id}/archive.zip"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/zip");
+    assert!(headers[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .starts_with("attachment;"));
+    // Hash with the system tool so the test does not reuse the code under test.
+    let mut child = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("sha256sum");
+    use std::io::Write;
+    child.stdin.take().unwrap().write_all(&zip).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let hex = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(hex.split_whitespace().next().unwrap(), v["zip_sha256"]);
+}
+
+#[tokio::test]
+async fn the_same_request_gives_the_same_zip_hash_across_jobs() {
+    let a = app(config());
+    let one = create(&a, "2000-03-02", "strict").await;
+    let two = create(&a, "2000-03-02", "strict").await;
+    assert_ne!(one["id"], two["id"]);
+    assert_eq!(one["zip_sha256"], two["zip_sha256"]);
+}
+
+#[tokio::test]
+async fn show_returns_the_job_and_unknown_ids_are_404() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, headers, body) = call(&a, get(&format!("/api/resurrections/{id}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"));
+    assert_eq!(as_json(&body)["zip_sha256"], v["zip_sha256"]);
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+
+    let missing = "0".repeat(32);
+    let (status, _, body) = call(&a, get(&format!("/api/resurrections/{missing}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(as_json(&body)["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn bad_requests_get_400_with_a_code() {
+    let a = app(config());
+    let cases = [
+        (
+            r#"{"example":"y2k-briefings","date":"2000-03-02","extra":1}"#,
+            "bad_request",
+        ),
+        (
+            r#"{"example":"nope","date":"2000-03-02"}"#,
+            "unknown_example",
+        ),
+        (
+            r#"{"example":"y2k-briefings","date":"2000-02-30"}"#,
+            "bad_date",
+        ),
+        (
+            r#"{"example":"y2k-briefings","date":"March 2"}"#,
+            "bad_date",
+        ),
+        (
+            r#"{"example":"y2k-briefings","date":"2000-03-02","policy":"yolo"}"#,
+            "bad_request",
+        ),
+        ("not json", "bad_request"),
+    ];
+    for (body, code) in cases {
+        let (status, _, bytes) = call(&a, post(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(as_json(&bytes)["error"]["code"], code, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn oversize_bodies_get_413() {
+    let a = app(config());
+    let big = format!(
+        r#"{{"example":"{}","date":"2000-03-02"}}"#,
+        "x".repeat(20_000)
+    );
+    let (status, _, bytes) = call(&a, post(&big)).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(as_json(&bytes)["error"]["code"], "body_too_large");
+}
+
+#[tokio::test]
+async fn a_date_before_the_page_was_captured_is_422_and_stores_nothing() {
+    let a = app(config());
+    let body = json!({ "example": "y2k-briefings", "date": "1999-01-01", "policy": "strict" });
+    let (status, _, bytes) = call(&a, post(&body.to_string())).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let v = as_json(&bytes);
+    assert_eq!(v["error"]["code"], "no_capture");
+    assert_eq!(v["error"]["verdict"], "ANACHRONISM");
+    assert!(v["error"]["next_step"].as_str().unwrap().len() > 10);
+}
+
+#[tokio::test]
+async fn the_rate_limit_answers_429_with_retry_after() {
+    let a = app(Config {
+        rate_limit: 3,
+        ..config()
+    });
+    for _ in 0..3 {
+        create(&a, "2000-03-02", "strict").await;
+    }
+    let body = json!({ "example": "y2k-briefings", "date": "2000-03-02" });
+    let (status, headers, bytes) = call(&a, post(&body.to_string())).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(headers.contains_key(header::RETRY_AFTER));
+    assert_eq!(as_json(&bytes)["error"]["code"], "rate_limited");
+}
+
+#[tokio::test]
+async fn jobs_expire() {
+    let a = app(Config {
+        job_ttl: Duration::ZERO,
+        ..config()
+    });
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, _, _) = call(&a, get(&format!("/api/resurrections/{id}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_oldest_job_is_evicted_when_the_store_is_full() {
+    let a = app(Config {
+        max_jobs: 2,
+        ..config()
+    });
+    let first = create(&a, "2000-03-02", "strict").await;
+    let _second = create(&a, "2000-03-02", "strict").await;
+    let _third = create(&a, "2000-03-02", "strict").await;
+    let id = first["id"].as_str().unwrap();
+    let (status, _, _) = call(&a, get(&format!("/api/resurrections/{id}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ------------------------------------------------------------ preview (A3)
+
+#[tokio::test]
+async fn preview_serves_the_page_with_sandboxing_headers() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "include-anachronisms").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, h, body) = call(&a, get(&format!("/p/{id}/"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(h[header::CONTENT_TYPE], "text/html");
+    let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(csp.starts_with("sandbox;"), "{csp}");
+    assert!(csp.contains("default-src 'none'"), "{csp}");
+    assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(h[header::REFERRER_POLICY], "no-referrer");
+    assert!(h["x-robots-tag"].to_str().unwrap().contains("noindex"));
+    assert!(!String::from_utf8_lossy(&body).contains("web.archive.org"));
+}
+
+#[tokio::test]
+async fn preview_serves_restored_images_and_only_those() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "include-anachronisms").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, h, body) = call(&a, get(&format!("/p/{id}/images/1.gif"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(h[header::CONTENT_TYPE], "image/gif");
+    assert!(body.starts_with(b"GIF8"));
+    // images/8.gif was never archived, so it is not in the job.
+    let (status, _, _) = call(&a, get(&format!("/p/{id}/images/8.gif"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn strict_jobs_do_not_serve_left_out_images() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, _, _) = call(&a, get(&format!("/p/{id}/images/1.gif"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn preview_refuses_paths_outside_the_job() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "include-anachronisms").await;
+    let id = v["id"].as_str().unwrap();
+    for path in [
+        "../../../../Cargo.toml",
+        "..%2f..%2f..%2fCargo.toml",
+        "%2e%2e/%2e%2e/Cargo.toml",
+        "images/../../Cargo.toml",
+        "/etc/passwd",
+        "//etc/passwd",
+        "images\\1.gif",
+        "images/1.gif%00.html",
+    ] {
+        let (status, _, body) = call(&a, get(&format!("/p/{id}/{path}"))).await;
+        assert!(
+            status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
+            "{path} gave {status}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&body).contains("[workspace]"),
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn preview_of_an_unknown_job_is_404_and_a_bare_path_redirects() {
+    let a = app(config());
+    let (status, _, _) = call(&a, get(&format!("/p/{}/", "0".repeat(32)))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = call(&a, get("/p/not-an-id")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, h, _) = call(&a, get(&format!("/p/{id}"))).await;
+    assert_eq!(status, StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(h[header::LOCATION], format!("/p/{id}/"));
+}
+
+#[tokio::test]
+async fn the_json_api_never_serves_restored_html() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "include-anachronisms").await;
+    let id = v["id"].as_str().unwrap();
+    for uri in [
+        format!("/api/resurrections/{id}"),
+        format!("/api/resurrections/{id}/briefings.html"),
+        "/api/examples".to_string(),
+    ] {
+        let (_, h, _) = call(&a, get(&uri)).await;
+        let ct = h
+            .get(header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap())
+            .unwrap_or("");
+        assert!(!ct.starts_with("text/html"), "{uri} served {ct}");
+    }
+}
+
+#[tokio::test]
+async fn the_certificate_file_is_served_as_json() {
+    let a = app(config());
+    let v = create(&a, "2000-03-02", "strict").await;
+    let id = v["id"].as_str().unwrap();
+    let (status, h, body) = call(&a, get(&format!("/p/{id}/REVENANT-CERTIFICATE.json"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(h[header::CONTENT_TYPE], "application/json");
+    assert_eq!(as_json(&body)["schema"], "revenant.certificate/1");
+}
