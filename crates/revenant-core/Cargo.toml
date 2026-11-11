@@ -1,0 +1,12 @@
+[package]
+name = "revenant-core"
+description = "Revenant engine: archive timestamps and the fidelity classifier. No network, no framework code."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1"

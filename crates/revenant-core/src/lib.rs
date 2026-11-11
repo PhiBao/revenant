@@ -1,0 +1,7 @@
+//! Revenant engine: archive timestamps and the fidelity classifier.
+//!
+//! This crate has no network or framework code. Archive access sits behind a
+//! later `SnapshotSource` trait. See `.kiro/specs/revenant-core-engine/`.
+
+pub mod fidelity;
+pub mod time;

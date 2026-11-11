@@ -10,3 +10,8 @@ This write-up follows the eight prompts in the Kiroween 2026 rules. Each section
 6. MCP: pending (`revenant-mcp` and the Devpost MCP).
 7. Property-based testing: pending (`crates/revenant-core`).
 8. Kiro powers: pending.
+
+## Evidence log (dated)
+
+- **Nov 11, 2026, spec amendment before code (spec-driven development).** The y2k.gov spike found a root page with captures on both sides of the target and different digests. PLAN.md's four verdicts could not represent it. The spec (`.kiro/specs/revenant-core-engine/requirements.md`, R2.3) added `UNCERTAIN` before the classifier was written. Evidence: `docs/spike/m1-y2k.md`, `crates/revenant-core/src/fidelity.rs`.
+- **Nov 11, 2026, property tests (PBT).** Five property tests in `crates/revenant-core/tests/properties.rs` cover order invariance, no false anachronism, proven digest matching, delta correctness, and a parser that never panics. All 15 engine tests pass, and clippy (`-D warnings`) and fmt are clean.
