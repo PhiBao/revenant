@@ -23,6 +23,28 @@ pub fn parse_cdx_timestamp(s: &str) -> Option<i64> {
     Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
+/// Format Unix seconds (UTC) as a 14-digit CDX timestamp.
+pub fn format_cdx_timestamp(unix: i64) -> String {
+    let days = unix.div_euclid(86_400);
+    let secs = unix.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}{m:02}{d:02}{:02}{:02}{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
+}
+
 fn is_leap(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
@@ -57,6 +79,19 @@ mod tests {
         assert_eq!(parse_cdx_timestamp("20000101000000"), Some(946_684_800));
         // One second before the Year 2000 rollover.
         assert_eq!(parse_cdx_timestamp("19991231235959"), Some(946_684_799));
+    }
+
+    #[test]
+    fn formats_what_it_parses() {
+        for s in [
+            "20000301091452",
+            "19991231235959",
+            "20000229120000",
+            "19700101000000",
+        ] {
+            let unix = parse_cdx_timestamp(s).expect("valid");
+            assert_eq!(format_cdx_timestamp(unix), s);
+        }
     }
 
     #[test]

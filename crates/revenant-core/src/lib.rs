@@ -7,5 +7,6 @@ pub mod autopsy;
 pub mod fidelity;
 pub mod index;
 pub mod package;
+pub mod pipeline;
 pub mod rewrite;
 pub mod time;

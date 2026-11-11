@@ -37,3 +37,15 @@ Third amendment (Nov 11, 2026). Two y2k captures with different CDX digests serv
 
 ## Out of scope for this spec
 Network access, de-archiving, packaging, and the HTTP API. Those belong to later specs.
+
+## R5 Resurrection pipeline (added Nov 11, 2026)
+- R5.1 WHEN given a source, a site, a page path and a target time THEN the system SHALL return a ZIP, a certificate, and the SHA-256 of the ZIP.
+- R5.2 The system SHALL discover the page's embedded assets from the page itself, and SHALL NOT take them from a caller-supplied list.
+- R5.3 WHEN an asset's verdict is `MISSING` THEN the system SHALL NOT include it in the ZIP, and SHALL list it in the certificate.
+- R5.4 WHEN the policy excludes anachronisms THEN an `ANACHRONISM` asset SHALL stay out of the ZIP and in the certificate.
+- R5.5 WHEN the page has no usable capture THEN the system SHALL return `NoCapture` and no ZIP.
+- R5.6 The same source, request and target SHALL give the same ZIP bytes. The certificate SHALL NOT hold wall-clock time.
+- R5.7 The ZIP SHALL contain `REVENANT-CERTIFICATE.json`. No URL attribute in the restored page SHALL point at `web.archive.org`. The certificate SHALL report how many text mentions of the archive host remain, because prose can mention it legitimately.
+- R5.10 WHEN the archive cannot be asked about a file (error, block, timeout) THEN its verdict SHALL be `UNKNOWN`, it SHALL stay out of the ZIP, and it SHALL NOT count as missing in Completeness.
+- R5.8 The system SHALL refuse a job above 500 assets or 64 MiB, and SHALL say which cap it hit.
+- R5.9 Navigation links are not restored in single-page scope. The certificate SHALL list them as `links_not_restored`.

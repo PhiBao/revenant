@@ -39,6 +39,22 @@ pub enum Verdict {
     Anachronism,
     /// The file has no captures.
     Missing,
+    /// The archive could not be asked, so nothing is known. Never produced by `classify`.
+    Unknown,
+}
+
+impl Verdict {
+    /// Stable upper-case name, used in the certificate and the UI.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Verdict::Proven => "PROVEN",
+            Verdict::Likely => "LIKELY",
+            Verdict::Uncertain => "UNCERTAIN",
+            Verdict::Anachronism => "ANACHRONISM",
+            Verdict::Missing => "MISSING",
+            Verdict::Unknown => "UNKNOWN",
+        }
+    }
 }
 
 /// The chosen capture for one file and the verdict on it.

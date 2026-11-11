@@ -37,6 +37,10 @@ pub struct Output {
     pub bytes: Vec<u8>,
     /// Site paths the page links to that are not in the ZIP, in first-seen order, no duplicates.
     pub not_restored: Vec<String>,
+    /// Embedded files the page needs (images, styles, backgrounds), as site paths.
+    pub assets: Vec<String>,
+    /// Navigation targets (`<a href>`, forms), as site paths. Never restored in single-page scope.
+    pub links: Vec<String>,
     pub scripts_removed: usize,
     pub archive_urls_unwrapped: usize,
 }
@@ -54,6 +58,8 @@ pub fn rewrite_html(input: &[u8], ctx: &Context) -> Result<Output, RewriteError>
     let text: String = input.iter().map(|&b| b as char).collect();
 
     let not_restored = RefCell::new(Vec::<String>::new());
+    let assets = RefCell::new(Vec::<String>::new());
+    let links = RefCell::new(Vec::<String>::new());
     let scripts = Cell::new(0usize);
     let unwrapped = Cell::new(0usize);
 
@@ -80,13 +86,32 @@ pub fn rewrite_html(input: &[u8], ctx: &Context) -> Result<Output, RewriteError>
             }
 
             let mut flagged = false;
+            let tag = el.tag_name();
             for attr in URL_ATTRS {
                 let Some(value) = el.get_attribute(attr) else {
                     continue;
                 };
-                match resolve(ctx, &value) {
+                let is_link = (attr == "href" && (tag == "a" || tag == "area")) || attr == "action";
+                let res = resolve(ctx, &value);
+                let seen = match &res {
+                    Resolution::Replace {
+                        site_path: Some(p), ..
+                    } => Some(p.clone()),
+                    Resolution::NotRestored { path, .. } => Some(path.clone()),
+                    _ => None,
+                };
+                if let Some(p) = seen {
+                    let list = if is_link { &links } else { &assets };
+                    let mut list = list.borrow_mut();
+                    if !list.contains(&p) {
+                        list.push(p);
+                    }
+                }
+                match res {
                     Resolution::Unchanged => {}
-                    Resolution::Replace { value, was_archive } => {
+                    Resolution::Replace {
+                        value, was_archive, ..
+                    } => {
                         if was_archive {
                             unwrapped.set(unwrapped.get() + 1);
                         }
@@ -137,6 +162,8 @@ pub fn rewrite_html(input: &[u8], ctx: &Context) -> Result<Output, RewriteError>
     Ok(Output {
         bytes,
         not_restored: not_restored.into_inner(),
+        assets: assets.into_inner(),
+        links: links.into_inner(),
         scripts_removed: scripts.get(),
         archive_urls_unwrapped: unwrapped.get(),
     })
@@ -148,6 +175,8 @@ enum Resolution {
     Replace {
         value: String,
         was_archive: bool,
+        /// Site-root path when the value points at this site.
+        site_path: Option<String>,
     },
     NotRestored {
         value: String,
@@ -187,6 +216,7 @@ fn resolve(ctx: &Context, raw: &str) -> Resolution {
             return Resolution::Replace {
                 value: unwrapped,
                 was_archive,
+                site_path: None,
             };
         } else {
             return Resolution::Unchanged;
@@ -222,6 +252,7 @@ fn resolve(ctx: &Context, raw: &str) -> Resolution {
         Resolution::Replace {
             value: rel,
             was_archive,
+            site_path: Some(target),
         }
     } else {
         Resolution::NotRestored {

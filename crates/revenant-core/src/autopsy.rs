@@ -21,6 +21,8 @@ pub struct Autopsy {
     pub completeness: Option<f64>,
     /// Percent, 0.0 to 100.0. `None` when no file was recovered.
     pub fidelity: Option<f64>,
+    /// Files the archive could not be asked about. Not counted as missing.
+    pub unknown: usize,
     pub ledger: Vec<LedgerRow>,
 }
 
@@ -33,9 +35,16 @@ pub fn autopsy(target: i64, referenced: &[&str], index: &CaptureIndex) -> Autops
             verdict: classify(target, index.captures(label)).verdict,
         })
         .collect();
+    summarize(ledger)
+}
 
-    let total = ledger.len();
-    let recovered: Vec<&LedgerRow> = ledger
+/// Build the autopsy from verdicts that are already known.
+pub fn summarize(ledger: Vec<LedgerRow>) -> Autopsy {
+    let answered: Vec<&LedgerRow> = ledger
+        .iter()
+        .filter(|r| r.verdict != Verdict::Unknown)
+        .collect();
+    let recovered: Vec<&&LedgerRow> = answered
         .iter()
         .filter(|r| r.verdict != Verdict::Missing)
         .collect();
@@ -44,12 +53,14 @@ pub fn autopsy(target: i64, referenced: &[&str], index: &CaptureIndex) -> Autops
         .filter(|r| matches!(r.verdict, Verdict::Proven | Verdict::Likely))
         .count();
 
-    let completeness = (total > 0).then(|| percent(recovered.len(), total));
+    let completeness = (!answered.is_empty()).then(|| percent(recovered.len(), answered.len()));
     let fidelity = (!recovered.is_empty()).then(|| percent(trusted, recovered.len()));
+    let unknown = ledger.len() - answered.len();
 
     Autopsy {
         completeness,
         fidelity,
+        unknown,
         ledger,
     }
 }
