@@ -32,7 +32,7 @@
       "text": "Here is a page from a retired government site, as it stood on the second of March, two thousand. You press one button. Revenant counts what the archive still holds: seven of the twelve files, about fifty eight percent. The other five were never saved, and it says so instead of hiding them.",
       "scene": {
         "kind": "page",
-        "src": "http://127.0.0.1:18110/",
+        "src": "http://127.0.0.1:PORT/",
         "zoom": 1.6,
         "wait_for": [
           "text=Begin autopsy"
@@ -72,7 +72,7 @@
       "text": "Now the hard part. By their save dates alone, seven files look too new to trust, so the score is zero. But the old web server stamped every file with the day it last changed, and all those days come before the date you chose. With that evidence the score is one hundred percent, and Revenant tells you whose claim it is.",
       "scene": {
         "kind": "page",
-        "src": "http://127.0.0.1:18110/",
+        "src": "http://127.0.0.1:PORT/",
         "zoom": 1.6,
         "wait_for": [
           "text=Begin autopsy"
@@ -102,11 +102,51 @@
       }
     },
     {
-      "id": "s5_annotated",
-      "text": "Then you see the page itself. Under every picture is a tag: attested, with the day the server last changed it. Anything the archive never saved is marked not archived. Nothing is quietly filled in.",
+      "id": "s5_curtain",
+      "text": "Here is the same page, restored two ways, from the same archive. On the left, dates alone: six pictures are missing, because the archive saved them two days late. On the right, the server's own dates put them back, each one tagged.",
       "scene": {
         "kind": "page",
-        "src": "http://127.0.0.1:18110/",
+        "src": "http://127.0.0.1:PORT/",
+        "zoom": 1.6,
+        "hold": 0.25,
+        "wait_for": [
+          "text=Begin autopsy"
+        ],
+        "settle": 0.8,
+        "actions": [
+          {
+            "action": "click",
+            "sel": "text=Begin autopsy",
+            "after": 0.4
+          },
+          {
+            "action": "click",
+            "sel": "text=Resurrect it",
+            "after": 0.6
+          },
+          {
+            "action": "wait",
+            "sec": 1.0
+          },
+          {
+            "action": "scrollTo",
+            "sel": ".curtain-labels",
+            "dur": 0.9,
+            "after": 0.5
+          },
+          {
+            "action": "wait",
+            "sec": 10.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "s5_annotated",
+      "text": "Under every picture on the right is a tag: attested, with the day the server last changed it. Anything the archive never saved is marked not archived. Nothing is quietly filled in.",
+      "scene": {
+        "kind": "page",
+        "src": "http://127.0.0.1:PORT/",
         "zoom": 1.6,
         "wait_for": [
           "text=Begin autopsy"
@@ -145,7 +185,7 @@
       "text": "You download a ZIP with a certificate: each file's save time, its source and a fingerprint. The same input always gives the same ZIP, and the certificate shows the exact commands to check it yourself.",
       "scene": {
         "kind": "page",
-        "src": "http://127.0.0.1:18110/",
+        "src": "http://127.0.0.1:PORT/",
         "zoom": 1.6,
         "wait_for": [
           "text=Begin autopsy"
@@ -187,7 +227,7 @@
       "text": "It works on a page of your own too. You paste an address, tick the box that says the site is yours, and Revenant asks the real archive one question at a time. It never visits the site itself. Run live, this same page comes back with the same answer: fifty eight percent complete, one hundred percent trusted.",
       "scene": {
         "kind": "page",
-        "src": "http://127.0.0.1:18110/",
+        "src": "http://127.0.0.1:PORT/",
         "zoom": 1.6,
         "wait_for": [
           "text=Begin autopsy"
@@ -226,7 +266,7 @@
       "text": "Not sure which day to pick? One click shows every month the archive holds a copy of the address. This is a federal agency's homepage, with three hundred twenty four months back to nineteen ninety six. Pick a month, and the date fills itself.",
       "scene": {
         "kind": "page",
-        "src": "http://127.0.0.1:18110/",
+        "src": "http://127.0.0.1:PORT/",
         "zoom": 1.6,
         "wait_for": [
           "text=Begin autopsy"

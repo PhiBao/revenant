@@ -5,9 +5,9 @@ import { useEffect, useId, useRef, useState } from "react";
 /** Divider positions the intro sweep passes through, with the seconds each leg takes (W10.6). */
 const SWEEP: [number, number][] = [
   [100, 1.2],
-  [100, 0.6],
+  [100, 2.5],
   [0, 2.0],
-  [0, 0.6],
+  [0, 2.5],
   [50, 1.0],
 ];
 
