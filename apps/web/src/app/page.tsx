@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createJob,
   createLive,
+  formatDay,
   getLive,
+  getTimeline,
   listExamples,
   type Certificate as Cert,
   type Example,
   type Failure,
   type Job,
+  type Timeline,
   sameRestore,
 } from "@/lib/api";
 import { Certificate } from "@/components/Certificate";
@@ -19,6 +22,7 @@ import { Ekg } from "@/components/Ekg";
 import { EvidenceDelta } from "@/components/EvidenceDelta";
 import { Ledger } from "@/components/Ledger";
 import { Mark } from "@/components/Mark";
+import { MonthStrip } from "@/components/MonthStrip";
 import { Vitals } from "@/components/Vitals";
 
 const REPO = "https://github.com/PhiBao/revenant";
@@ -90,6 +94,9 @@ export default function Home() {
   const [notes, setNotes] = useState<string[]>([]);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [revealed, setRevealed] = useState(false);
+  const [timeline, setTimeline] = useState<Timeline | null>(null);
+  const [timelineBusy, setTimelineBusy] = useState(false);
+  const [timelineNote, setTimelineNote] = useState("");
 
   const autopsyRef = useRef<HTMLHeadingElement>(null);
   const revealRef = useRef<HTMLHeadingElement>(null);
@@ -99,6 +106,24 @@ export default function Home() {
 
   const example = examples?.find((e) => e.id === exampleId) ?? null;
   const live = source === "live";
+
+  const askTimeline = async () => {
+    setTimelineBusy(true);
+    setTimelineNote("");
+    setTimeline(null);
+    try {
+      setTimeline(await getTimeline(liveUrl));
+    } catch (f) {
+      const fail = f as Failure;
+      setTimelineNote(
+        fail.kind === "api"
+          ? fail.message
+          : "The service could not be reached. That is not the same as nothing being there.",
+      );
+    } finally {
+      setTimelineBusy(false);
+    }
+  };
 
   const fetchExamples = useCallback(() => {
     listExamples()
@@ -416,6 +441,32 @@ export default function Home() {
                     required
                     disabled={busy}
                   />
+                </div>
+
+                <div className="field">
+                  <button
+                    type="button"
+                    className="chip"
+                    disabled={busy || timelineBusy || liveUrl.trim() === ""}
+                    onClick={askTimeline}
+                  >
+                    {timelineBusy ? "Asking the archive…" : "Show what the archive holds"}
+                  </button>
+                  {timelineNote ? (
+                    <p className="fine" role="status">
+                      {timelineNote}
+                    </p>
+                  ) : null}
+                  {timeline ? (
+                    <MonthStrip timeline={timeline} chosen={liveDate} onPick={setLiveDate} />
+                  ) : null}
+                  {timeline?.first_capture && liveDate &&
+                  liveDate.replaceAll("-", "") < timeline.first_capture.slice(0, 8) ? (
+                    <p className="fine" role="status">
+                      The archive&apos;s first capture of this page is{" "}
+                      {formatDay(timeline.first_capture)}. A date before it has nothing to restore.
+                    </p>
+                  ) : null}
                 </div>
 
                 <label className="check">

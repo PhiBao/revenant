@@ -170,6 +170,29 @@ export async function getLive(id: string): Promise<LiveState> {
   return (await res.json()) as LiveState;
 }
 
+export type Timeline = {
+  label: string;
+  first_capture: string | null;
+  latest_month: string | null;
+  months: { month: string; first_capture: string }[];
+  truncated: boolean;
+};
+
+export async function getTimeline(url: string): Promise<Timeline> {
+  let res: Response;
+  try {
+    res = await fetch("/api/timeline", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+  } catch {
+    throw { kind: "network" } satisfies Failure;
+  }
+  if (!res.ok) throw await parseFailure(res);
+  return (await res.json()) as Timeline;
+}
+
 /** `20000301091452` becomes `2000-03-01 09:14 UTC`. */
 export function formatCapture(cdx: string | null): string {
   if (!cdx || cdx.length !== 14) return "—";

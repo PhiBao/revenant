@@ -49,3 +49,17 @@ Why: a real 55-file page took 201 seconds live, and the form said "about a minut
 - W7.2 WHILE a live run is in progress THEN the page SHALL show what it is doing now, the number of questions asked, and the elapsed time, and SHALL update at least every two seconds.
 - W7.3 The page SHALL NOT show a percentage or a time-left estimate, because the number of files is not known until the page has been read.
 - W7.4 WHEN a live run has taken longer than 90 seconds THEN the page SHALL say the page is a large one, and that leaving it open is fine.
+
+## W8 Month strip (added Nov 12, 2026)
+
+Source: resurrection-api group T.
+
+Why: the date field is blind, and the commonest live failure is a date before the first capture.
+
+- W8.1 The live form SHALL offer a "Show what the archive holds" button. The page SHALL NOT call the timeline on every keystroke; one click is one archive question.
+- W8.2 WHEN the answer arrives THEN the page SHALL show one cell per calendar month from the first to the latest month, grouped by year. A month with a capture SHALL be a button; a month without one SHALL be shown as empty and SHALL NOT be a button.
+- W8.3 Choosing a month SHALL set the date to the last day of that month, because the target time is the end of the day (W6.6) and a month button means "as it was by the end of that month". The date field SHALL get `min` and `max` from the first capture and the latest month.
+- W8.4 The strip SHALL say "the archive holds at least one capture in this month". It SHALL NOT say the page changed, and SHALL NOT mark months by digest (T1.5).
+- W8.5 WHEN the answer has no months THEN the page SHALL say the archive holds no capture of that address, and SHALL NOT call it a failure. WHEN the archive cannot be asked THEN the page SHALL say that is not the same as nothing being there (E-rule UNKNOWN).
+- W8.6 WHEN the chosen date is before the first capture THEN the page SHALL say so before the run starts.
+- W8.7 Every month button SHALL have an accessible name with the month and year, and the strip SHALL work with the keyboard alone (W5.3).

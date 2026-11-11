@@ -1056,3 +1056,17 @@ input[type="date"]:disabled {
     scroll-behavior: auto !important;
   }
 }
+
+/* Month strip (W8) */
+.strip { margin-top: 0.75rem; }
+.strip-year { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.35rem; }
+.strip-label { font-family: var(--font-mono, monospace); width: 3.2rem; font-size: 0.8rem; color: var(--dust); }
+.strip-months { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 2px; flex: 1; }
+.strip-cell {
+  font: inherit; font-size: 0.65rem; text-align: center; padding: 0.35rem 0;
+  border: 1px solid var(--life); background: transparent; color: var(--bone); cursor: pointer;
+}
+.strip-cell:hover { background: var(--slab-2); }
+.strip-cell.empty { border-color: var(--rule); color: var(--faint); cursor: default; }
+.strip-cell[aria-pressed="true"] { background: var(--life); color: var(--ink); font-weight: 700; }
+@media (max-width: 480px) { .strip-cell { font-size: 0.55rem; } .strip-label { width: 2.6rem; } }
